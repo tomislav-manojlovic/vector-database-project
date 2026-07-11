@@ -1,0 +1,3 @@
+# Needed by the next project stage (collection creation/import/query).
+# Keep the client in the same minor version family as the Docker image.
+qdrant-client>=1.18.0,<1.19.0

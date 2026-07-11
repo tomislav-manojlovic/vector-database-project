@@ -1,0 +1,20 @@
+name: qdrant-image-search
+
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.18.2
+    container_name: qdrant-image-search
+    restart: unless-stopped
+    ports:
+      # Local-only binding: other devices on the network cannot reach this instance.
+      - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_HTTP_PORT:-6333}:6333"
+      - "${QDRANT_BIND_ADDRESS:-127.0.0.1}:${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      # Named volume is safer than a Windows bind mount for Qdrant storage.
+      - qdrant_storage:/qdrant/storage
+    environment:
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
+
+volumes:
+  qdrant_storage:
+    name: qdrant-image-search-storage

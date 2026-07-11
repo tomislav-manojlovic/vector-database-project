@@ -1,0 +1,33 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Local configuration and logs
+.env
+infra/.env
+*.log
+
+# Editors and operating systems
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Downloaded and generated project data
+data/raw/
+data/images/
+data/embeddings/*.npy
+data/embeddings_test/
+data/cleaned/
+reports/error_analysis/
+reports/variant3_dataset_cleaning/
+
+# Frontend artifacts (the current UI has no build step)
+ui/node_modules/
+ui/dist/

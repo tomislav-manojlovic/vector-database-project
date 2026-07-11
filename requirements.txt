@@ -1,0 +1,9 @@
+pandas
+numpy
+torch
+torchvision
+transformers
+pillow
+tqdm
+qdrant-client>=1.18.0,<1.19.0
+python-dotenv

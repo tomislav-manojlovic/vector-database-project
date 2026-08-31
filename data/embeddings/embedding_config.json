@@ -3,6 +3,6 @@
   "embedding_dim": 512,
   "normalize": true,
   "distance_metric": "cosine",
-  "number_of_images": 1000,
-  "created_at": "2026-07-07T03:16:42.310411+00:00"
+  "number_of_images": 113000,
+  "created_at": "2026-08-31T17:24:02.157620+00:00"
 }

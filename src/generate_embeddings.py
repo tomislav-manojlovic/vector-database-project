@@ -25,7 +25,14 @@ except ModuleNotFoundError:
     )
 
 
-REQUIRED_COLUMNS = {"id", "image_path", "label"}
+REQUIRED_COLUMNS = {
+    "id",
+    "image_path",
+    "label",
+    "label_id",
+    "split",
+    "is_labeled",
+}
 OUTPUT_FILES = ("embeddings.npy", "embeddings_metadata.csv", "embedding_config.json")
 
 
@@ -64,7 +71,12 @@ def path_parts_lower(path: Path) -> tuple[str, ...]:
     return tuple(part.lower() for part in path.parts)
 
 
-def resolve_image_path(raw_path: str, images_root: Path, project_root: Path, metadata_dir: Path) -> Path:
+def resolve_image_path(
+    raw_path: str,
+    images_root: Path,
+    project_root: Path,
+    metadata_dir: Path,
+) -> Path:
     """Resolve image_path without duplicating data/images when it is already present."""
     image_path = Path(str(raw_path).strip())
 
@@ -99,7 +111,11 @@ def output_image_path(image_path: Path, project_root: Path) -> str:
 
 
 def warn_if_outputs_exist(output_dir: Path) -> None:
-    existing = [output_dir / filename for filename in OUTPUT_FILES if (output_dir / filename).exists()]
+    existing = [
+        output_dir / filename
+        for filename in OUTPUT_FILES
+        if (output_dir / filename).exists()
+    ]
     if existing:
         print("Warning: the following output files already exist and will be overwritten:")
         for path in existing:
@@ -165,10 +181,14 @@ def main() -> None:
             project_root=project_root,
             metadata_dir=metadata_path.parent,
         )
+
         row_data = {
             "id": row["id"],
             "image_path": output_image_path(image_path, project_root),
             "label": row["label"],
+            "label_id": int(row["label_id"]),
+            "split": str(row["split"]),
+            "is_labeled": bool(row["is_labeled"]),
         }
 
         if not image_path.exists():
@@ -195,18 +215,26 @@ def main() -> None:
             print(f"Batch failed, retrying images one by one. Reason: {exc}")
             for item in batch:
                 try:
-                    vector = extract_batch([item["resolved_path"]], model, processor, device)[0]
+                    vector = extract_batch(
+                        [item["resolved_path"]], model, processor, device
+                    )[0]
                 except ValueError as image_exc:
                     skipped_rows.append(
                         {
                             "id": item["id"],
                             "image_path": item["image_path"],
                             "label": item["label"],
+                            "label_id": item["label_id"],
+                            "split": item["split"],
+                            "is_labeled": item["is_labeled"],
                             "embedding_index": -1,
                             "status": f"skipped: {image_exc}",
                         }
                     )
-                    print(f"Skipping invalid image: {item['resolved_path']} ({image_exc})")
+                    print(
+                        f"Skipping invalid image: "
+                        f"{item['resolved_path']} ({image_exc})"
+                    )
                     continue
 
                 embedding_index = len(embeddings)
@@ -216,6 +244,9 @@ def main() -> None:
                         "id": item["id"],
                         "image_path": item["image_path"],
                         "label": item["label"],
+                        "label_id": item["label_id"],
+                        "split": item["split"],
+                        "is_labeled": item["is_labeled"],
                         "embedding_index": embedding_index,
                         "status": "ok",
                     }
@@ -230,6 +261,9 @@ def main() -> None:
                     "id": item["id"],
                     "image_path": item["image_path"],
                     "label": item["label"],
+                    "label_id": item["label_id"],
+                    "split": item["split"],
+                    "is_labeled": item["is_labeled"],
                     "embedding_index": embedding_index,
                     "status": "ok",
                 }

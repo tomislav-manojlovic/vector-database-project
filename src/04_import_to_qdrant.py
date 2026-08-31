@@ -29,7 +29,16 @@ def validate_inputs(embeddings, metadata):
             f"a dobijeno je {embeddings.shape[1]}."
         )
 
-    required_columns = {"id", "image_path", "label", "embedding_index", "status"}
+    required_columns = {
+        "id",
+        "image_path",
+        "label",
+        "label_id",
+        "split",
+        "is_labeled",
+        "embedding_index",
+        "status",
+    }
     missing_columns = required_columns - set(metadata.columns)
 
     if missing_columns:
@@ -53,6 +62,9 @@ def build_point(row, embeddings):
         "id": image_id,
         "image_path": str(row["image_path"]),
         "label": str(row["label"]),
+        "label_id": int(row["label_id"]),
+        "split": str(row["split"]),
+        "is_labeled": bool(row["is_labeled"]),
     }
 
     return PointStruct(

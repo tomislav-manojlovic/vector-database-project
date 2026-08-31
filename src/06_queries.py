@@ -109,7 +109,11 @@ def filter_by_label(label: str, limit: int):
     print(f"Next page offset: {next_page}")
 
 
-def search_similar_by_id(point_id: int, top_k: int, label_filter: str | None = None):
+def search_similar_by_id(
+    point_id: int,
+    top_k: int,
+    label_filter: str | None = None,
+) -> list[Any] | None:
     client = get_qdrant_client()
 
     points = client.retrieve(
@@ -139,21 +143,31 @@ def search_similar_by_id(point_id: int, top_k: int, label_filter: str | None = N
         collection_name=COLLECTION_NAME,
         query=query_vector,
         query_filter=q_filter,
-        limit=top_k,
+        # Qdrant will normally return the query point itself with score 1.0.
+        # Request one extra result so that top_k other images remain after exclusion.
+        limit=top_k + 1,
         with_payload=True,
         with_vectors=False,
     )
+
+    similar_points = [
+        scored_point
+        for scored_point in result.points
+        if int(scored_point.id) != point_id
+    ][:top_k]
 
     print(f"Top {top_k} najsličnijih za ID={point_id}:")
     if label_filter:
         print(f"Filter label='{label_filter}'")
 
-    for scored_point in result.points:
+    for scored_point in similar_points:
         print(
             f"ID: {scored_point.id} | "
             f"Score: {scored_point.score:.4f} | "
             f"Payload: {scored_point.payload}"
         )
+
+    return similar_points
 
 
 def update_payload(point_id: int, key: str, value: str):

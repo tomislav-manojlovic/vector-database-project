@@ -404,19 +404,6 @@ vector-database-project/
 
 Veliki generisani fajlovi, kao što su slike, embedding matrica, izveštaji, `.venv` i Docker podaci, ne čuvaju se u Git repozitorijumu.
 
-## Najvažnije za usmenu odbranu
-
-1. **Zašto CLIP?** Pretvara sadržaj slike u vektor od 512 brojeva, pa slike mogu matematički da se porede.
-2. **Zašto Qdrant?** Namenjen je čuvanju i efikasnoj pretrazi vektora, uz payload podatke i filtere.
-3. **Kako radi pretraga?** Qdrant poredi upitni vektor sa vektorima u kolekciji koristeći Cosine metriku i vraća najbliže rezultate.
-4. **Kako radi klasifikacija?** Pet najbližih suseda glasa za klasu, a njihov similarity score predstavlja težinu glasa.
-5. **Zašto analiza koristi 1.000 slika?** To je uravnotežen i ponovljiv uzorak stvarnih podataka koji se dovoljno brzo obrađuje tokom demonstracije.
-6. **Šta su slični parovi?** Dve različite slike čiji CLIP vektori imaju score najmanje `0.94`; to je kandidat za pregled, a ne dokaz da su slike identične.
-7. **Da li se original briše?** Ne. CRUD menja samo demo pointove, a čišćenje pravi posebnu kopiju.
-8. **Da li su testovi mock?** Dugme u UI-ju testira stvarnu lokalnu Qdrant kolekciju i stvarne embedding podatke.
-9. **Da li se model trenira?** Ne. Koristi se unapred trenirani CLIP i weighted k-NN u vreme upita.
-10. **Zašto je deploy linearan?** Svaki korak zavisi od prethodnog i izvršavanje se prekida odmah ako neki korak ne uspe.
-
 ## Česti problemi
 
 ### `scripts\deploy.ps1` ne postoji

@@ -166,6 +166,8 @@ class QdrantSimilarityBackend:
         client: Any | None = None,
         collection_name: str | None = None,
         batch_size: int = 100,
+        exact: bool = False,
+        hnsw_ef: int = 64,
     ):
         try:
             from qdrant_client.models import QueryRequest, SearchParams
@@ -182,12 +184,17 @@ class QdrantSimilarityBackend:
 
         if batch_size < 1:
             raise ValueError("batch_size mora biti najmanje 1.")
+        if hnsw_ef < 1:
+            raise ValueError("hnsw_ef mora biti najmanje 1.")
 
         self.client = client
         self.collection_name = collection_name or "stl10_clip_images"
         self.batch_size = batch_size
         self.query_request_class = QueryRequest
-        self.search_params = SearchParams(exact=True)
+        self.search_params = SearchParams(
+            exact=exact,
+            hnsw_ef=None if exact else hnsw_ef,
+        )
 
     def validate(self, expected_count: int) -> None:
         if not self.client.collection_exists(self.collection_name):
@@ -773,11 +780,20 @@ def verify_cleaned(output_dir: Path) -> dict[str, Any]:
     }
 
 
-def create_backend(name: str, batch_size: int) -> SimilarityBackend:
+def create_backend(
+    name: str,
+    batch_size: int,
+    exact: bool = False,
+    hnsw_ef: int = 64,
+) -> SimilarityBackend:
     if name == "local":
         return LocalSimilarityBackend()
     if name == "qdrant":
-        return QdrantSimilarityBackend(batch_size=batch_size)
+        return QdrantSimilarityBackend(
+            batch_size=batch_size,
+            exact=exact,
+            hnsw_ef=hnsw_ef,
+        )
     raise ValueError(f"Nepoznat backend: {name}")
 
 
@@ -795,7 +811,12 @@ def command_validate(args: argparse.Namespace) -> None:
 def command_analyze(args: argparse.Namespace) -> None:
     validate_thresholds(args.threshold, args.probable_threshold, args.very_likely_threshold)
     embeddings, metadata = load_inputs()
-    backend = create_backend(args.backend, args.batch_size)
+    backend = create_backend(
+        args.backend,
+        args.batch_size,
+        exact=args.exact,
+        hnsw_ef=args.hnsw_ef,
+    )
     backend.validate(len(metadata))
 
     print(
@@ -893,7 +914,10 @@ def command_verify_cleaned(args: argparse.Namespace) -> None:
 def command_compare(args: argparse.Namespace) -> None:
     embeddings, metadata = load_inputs()
     local_backend = LocalSimilarityBackend()
-    qdrant_backend = QdrantSimilarityBackend(batch_size=args.batch_size)
+    qdrant_backend = QdrantSimilarityBackend(
+        batch_size=args.batch_size,
+        exact=True,
+    )
     qdrant_backend.validate(len(metadata))
     local_pairs = local_backend.find_pairs(
         embeddings, metadata, args.threshold, args.top_k
@@ -931,6 +955,17 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--very-likely-threshold", type=float, default=0.97)
     analyze_parser.add_argument("--top-k", type=int, default=50)
     analyze_parser.add_argument("--batch-size", type=int, default=100)
+    analyze_parser.add_argument(
+        "--exact",
+        action="store_true",
+        help="Koristi egzaktnu Qdrant pretragu umesto HNSW pretrage.",
+    )
+    analyze_parser.add_argument(
+        "--hnsw-ef",
+        type=int,
+        default=64,
+        help="HNSW search ef vrednost (podrazumevano: 64).",
+    )
     analyze_parser.add_argument("--report-dir", default=str(DEFAULT_REPORT_DIR))
     analyze_parser.add_argument("--html-group-limit", type=int, default=30)
 

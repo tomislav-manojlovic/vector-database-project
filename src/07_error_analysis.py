@@ -168,7 +168,7 @@ class LocalNeighborBackend:
 
 
 class QdrantNeighborBackend:
-    """Tačna cosine pretraga nad kolekcijom stl10_clip_images."""
+    """Cosine pretraga nad kolekcijom stl10_clip_images."""
 
     name = "qdrant"
 
@@ -177,6 +177,8 @@ class QdrantNeighborBackend:
         client: Any | None = None,
         collection_name: str | None = None,
         batch_size: int = 100,
+        exact: bool = False,
+        hnsw_ef: int = 64,
     ):
         try:
             from qdrant_client.models import QueryRequest, SearchParams
@@ -194,13 +196,18 @@ class QdrantNeighborBackend:
 
         self.client = client
         self.collection_name = collection_name or "stl10_clip_images"
-        self.search_params = SearchParams(exact=True)
+        self.search_params = SearchParams(
+            exact=exact,
+            hnsw_ef=None if exact else hnsw_ef,
+        )
         self.query_request_class = QueryRequest
         self.batch_size = batch_size
         self._neighbor_cache: dict[int, list[Neighbor]] = {}
 
         if self.batch_size < 1:
             raise ValueError("Qdrant batch size mora biti najmanje 1.")
+        if hnsw_ef < 1:
+            raise ValueError("hnsw_ef mora biti najmanje 1.")
 
     def validate(self, expected_count: int) -> None:
         if not self.client.collection_exists(self.collection_name):
@@ -312,11 +319,17 @@ def build_backend(
     embeddings: np.ndarray,
     metadata: pd.DataFrame,
     qdrant_batch_size: int = 100,
+    exact: bool = False,
+    hnsw_ef: int = 64,
 ) -> NeighborBackend:
     if backend_name == "local":
         return LocalNeighborBackend(embeddings, metadata)
     if backend_name == "qdrant":
-        return QdrantNeighborBackend(batch_size=qdrant_batch_size)
+        return QdrantNeighborBackend(
+            batch_size=qdrant_batch_size,
+            exact=exact,
+            hnsw_ef=hnsw_ef,
+        )
     raise ValueError(f"Nepoznat backend: {backend_name}")
 
 
@@ -893,6 +906,8 @@ def command_analyze(args: argparse.Namespace) -> None:
         embeddings,
         metadata,
         qdrant_batch_size=args.qdrant_batch_size,
+        exact=args.exact,
+        hnsw_ef=args.hnsw_ef,
     )
     backend.validate(len(metadata))
 
@@ -927,7 +942,13 @@ def command_analyze(args: argparse.Namespace) -> None:
 
 def command_inspect(args: argparse.Namespace) -> None:
     embeddings, metadata = load_inputs()
-    backend = build_backend(args.backend, embeddings, metadata)
+    backend = build_backend(
+        args.backend,
+        embeddings,
+        metadata,
+        exact=args.exact,
+        hnsw_ef=args.hnsw_ef,
+    )
     backend.validate(len(metadata))
 
     matches = metadata.index[metadata["id"] == args.id].tolist()
@@ -945,7 +966,13 @@ def command_inspect(args: argparse.Namespace) -> None:
 
 def command_demo(args: argparse.Namespace) -> None:
     embeddings, metadata = load_inputs()
-    backend = build_backend(args.backend, embeddings, metadata)
+    backend = build_backend(
+        args.backend,
+        embeddings,
+        metadata,
+        exact=args.exact,
+        hnsw_ef=args.hnsw_ef,
+    )
     backend.validate(len(metadata))
 
     if args.id is None:
@@ -969,7 +996,7 @@ def command_demo(args: argparse.Namespace) -> None:
 def command_compare(args: argparse.Namespace) -> None:
     embeddings, metadata = load_inputs()
     local_backend = LocalNeighborBackend(embeddings, metadata)
-    qdrant_backend = QdrantNeighborBackend()
+    qdrant_backend = QdrantNeighborBackend(exact=True)
     qdrant_backend.validate(len(metadata))
 
     sample_size = min(args.sample_size, len(metadata))
@@ -1002,6 +1029,17 @@ def command_compare(args: argparse.Namespace) -> None:
 def add_shared_analysis_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--backend", choices=["qdrant", "local"], default="qdrant")
     parser.add_argument("--k", type=int, default=5)
+    parser.add_argument(
+        "--exact",
+        action="store_true",
+        help="Koristi egzaktnu Qdrant pretragu umesto HNSW pretrage.",
+    )
+    parser.add_argument(
+        "--hnsw-ef",
+        type=int,
+        default=64,
+        help="HNSW search ef vrednost (podrazumevano: 64).",
+    )
     parser.add_argument(
         "--annotation-similarity",
         type=float,

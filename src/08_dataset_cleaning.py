@@ -63,6 +63,7 @@ class SimilarityBackend(Protocol):
         metadata: pd.DataFrame,
         threshold: float,
         top_k: int,
+        query_indices: np.ndarray | None = None,
     ) -> list[SimilarPair]:
         ...
 
@@ -110,6 +111,17 @@ def load_inputs() -> tuple[np.ndarray, pd.DataFrame]:
     return selected, metadata
 
 
+def select_query_indices(total: int, max_images: int, seed: int) -> np.ndarray:
+    """Izaberi reproducibilan uzorak upita; nula znači ceo dataset."""
+    if max_images < 0:
+        raise ValueError("--max-images ne može biti negativan.")
+    if max_images == 0 or max_images >= total:
+        return np.arange(total, dtype=int)
+
+    rng = np.random.default_rng(seed)
+    return np.sort(rng.choice(total, size=max_images, replace=False))
+
+
 def pair_from_rows(left: pd.Series, right: pd.Series, score: float) -> SimilarPair:
     if int(left["id"]) > int(right["id"]):
         left, right = right, left
@@ -139,21 +151,37 @@ class LocalSimilarityBackend:
         metadata: pd.DataFrame,
         threshold: float,
         top_k: int,
+        query_indices: np.ndarray | None = None,
     ) -> list[SimilarPair]:
-        similarities = embeddings @ embeddings.T
-        left_indices, right_indices = np.triu_indices(len(embeddings), k=1)
-        scores = similarities[left_indices, right_indices]
-        selected = np.flatnonzero(scores >= threshold)
+        if query_indices is None:
+            query_indices = np.arange(len(metadata), dtype=int)
 
-        pairs = [
-            pair_from_rows(
-                metadata.iloc[int(left_indices[index])],
-                metadata.iloc[int(right_indices[index])],
-                float(scores[index]),
-            )
-            for index in selected
-        ]
-        return sorted(pairs, key=lambda pair: (-pair.score, pair.left_id, pair.right_id))
+        unique_pairs: dict[tuple[int, int], SimilarPair] = {}
+        block_size = 128
+        for start in range(0, len(query_indices), block_size):
+            block_indices = query_indices[start : start + block_size]
+            similarities = embeddings[block_indices] @ embeddings.T
+
+            for row_index, query_index in enumerate(block_indices):
+                scores = similarities[row_index]
+                neighbor_indices = np.flatnonzero(scores >= threshold)
+                for neighbor_index in neighbor_indices:
+                    if int(neighbor_index) == int(query_index):
+                        continue
+                    pair = pair_from_rows(
+                        metadata.iloc[int(query_index)],
+                        metadata.iloc[int(neighbor_index)],
+                        float(scores[neighbor_index]),
+                    )
+                    key = (pair.left_id, pair.right_id)
+                    previous = unique_pairs.get(key)
+                    if previous is None or pair.score > previous.score:
+                        unique_pairs[key] = pair
+
+        return sorted(
+            unique_pairs.values(),
+            key=lambda pair: (-pair.score, pair.left_id, pair.right_id),
+        )
 
 
 class QdrantSimilarityBackend:
@@ -217,43 +245,47 @@ class QdrantSimilarityBackend:
         metadata: pd.DataFrame,
         threshold: float,
         top_k: int,
+        query_indices: np.ndarray | None = None,
     ) -> list[SimilarPair]:
         if top_k < 2:
             raise ValueError("top_k mora biti najmanje 2.")
 
         metadata_by_id = metadata.set_index("id", drop=False)
         unique_pairs: dict[tuple[int, int], SimilarPair] = {}
-        total_batches = math.ceil(len(metadata) / self.batch_size)
+        if query_indices is None:
+            query_indices = np.arange(len(metadata), dtype=int)
+        total_batches = math.ceil(len(query_indices) / self.batch_size)
 
         for batch_number, start in enumerate(
-            range(0, len(metadata), self.batch_size), start=1
+            range(0, len(query_indices), self.batch_size), start=1
         ):
-            end = min(start + self.batch_size, len(metadata))
+            end = min(start + self.batch_size, len(query_indices))
+            batch_indices = query_indices[start:end]
             requests = [
                 self.query_request_class(
                     query=embeddings[index].astype(float).tolist(),
                     score_threshold=threshold,
-                    limit=top_k,
-                    with_payload=["label", "image_path"],
+                    limit=top_k + 1,
+                    with_payload=False,
                     with_vector=False,
                     params=self.search_params,
                 )
-                for index in range(start, end)
+                for index in batch_indices
             ]
             responses = self.client.query_batch_points(
                 collection_name=self.collection_name,
                 requests=requests,
             )
-            if len(responses) != end - start:
+            if len(responses) != len(batch_indices):
                 raise RuntimeError("Neispravan broj Qdrant batch odgovora.")
 
-            for index, response in zip(range(start, end), responses):
+            for index, response in zip(batch_indices, responses):
                 query_row = metadata.iloc[index]
                 query_id = int(query_row["id"])
                 points = response.points
 
                 if (
-                    len(points) == top_k
+                    len(points) == top_k + 1
                     and points[-1].score is not None
                     and float(points[-1].score) >= threshold
                 ):
@@ -282,7 +314,7 @@ class QdrantSimilarityBackend:
 
             print(
                 f"Qdrant batch: {batch_number}/{total_batches} "
-                f"({end}/{len(metadata)} slika)"
+                f"({end}/{len(query_indices)} upita)"
             )
 
         return sorted(
@@ -574,7 +606,7 @@ body{{font-family:Segoe UI,Arial,sans-serif;margin:0;background:#f6f8fc;color:#1
 </style></head><body><main>
 <h1>Pronalaženje duplikata i veoma sličnih slika</h1>
 <p class="note">CLIP embedding + {html.escape(summary['backend'])} cosine pretraga · prag kandidata {summary['candidate_threshold']:.2f}</p>
-<div class="stats"><div class="stat"><strong>{summary['total_images']}</strong>slika</div><div class="stat"><strong>{summary['candidate_pairs']}</strong>parova</div><div class="stat"><strong>{summary['groups']}</strong>grupa</div><div class="stat"><strong>{summary['recommended_removals']}</strong>stroga predloga za uklanjanje</div></div>
+<div class="stats"><div class="stat"><strong>{summary['total_images']}</strong>slika u skupu</div><div class="stat"><strong>{summary['analyzed_queries']}</strong>analiziranih upita</div><div class="stat"><strong>{summary['candidate_pairs']}</strong>parova</div><div class="stat"><strong>{summary['groups']}</strong>grupa</div><div class="stat"><strong>{summary['recommended_removals']}</strong>stroga predloga za uklanjanje</div></div>
 <section class="panel"><h2>Bezbednosno pravilo</h2><p>Originalne slike i metadata se ne brišu. <em>remove_candidate</em> je samo strogi predlog za novu kopiju dataseta. Stavke <em>review</em> zahtevaju pregled slika.</p></section>
 <section class="panel"><h2>Kategorije</h2><ul><li>very_likely_duplicate: score ≥ {summary['very_likely_threshold']:.2f}</li><li>probable_duplicate: score ≥ {summary['probable_threshold']:.2f}</li><li>very_similar: score ≥ {summary['candidate_threshold']:.2f}</li></ul></section>
 <section class="panel"><h2>Parovi kandidata</h2><div class="table-wrap"><table><thead><tr><th>Levi ID</th><th>Labela</th><th>Desni ID</th><th>Labela</th><th>Score</th><th>Kategorija</th></tr></thead><tbody>{table_body}</tbody></table></div></section>
@@ -597,6 +629,7 @@ def save_analysis(
     probable_threshold: float,
     very_likely_threshold: float,
     html_group_limit: int,
+    analyzed_queries: int,
 ) -> dict[str, Any]:
     report_dir.mkdir(parents=True, exist_ok=True)
     recommended_removals = int(
@@ -608,6 +641,8 @@ def save_analysis(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "backend": backend_name,
         "total_images": len(metadata),
+        "analyzed_queries": analyzed_queries,
+        "complete_scan": analyzed_queries == len(metadata),
         "candidate_threshold": candidate_threshold,
         "probable_threshold": probable_threshold,
         "very_likely_threshold": very_likely_threshold,
@@ -811,6 +846,11 @@ def command_validate(args: argparse.Namespace) -> None:
 def command_analyze(args: argparse.Namespace) -> None:
     validate_thresholds(args.threshold, args.probable_threshold, args.very_likely_threshold)
     embeddings, metadata = load_inputs()
+    query_indices = select_query_indices(
+        len(metadata),
+        max_images=args.max_images,
+        seed=args.seed,
+    )
     backend = create_backend(
         args.backend,
         args.batch_size,
@@ -820,10 +860,15 @@ def command_analyze(args: argparse.Namespace) -> None:
     backend.validate(len(metadata))
 
     print(
-        f"Tražim parove: backend={backend.name}, threshold={args.threshold:.4f}"
+        f"Tražim parove: backend={backend.name}, threshold={args.threshold:.4f}, "
+        f"upiti={len(query_indices)}, skup={len(metadata)}"
     )
     pairs = backend.find_pairs(
-        embeddings, metadata, threshold=args.threshold, top_k=args.top_k
+        embeddings,
+        metadata,
+        threshold=args.threshold,
+        top_k=args.top_k,
+        query_indices=query_indices,
     )
     pair_frame = pairs_dataframe(
         pairs, args.probable_threshold, args.very_likely_threshold
@@ -843,11 +888,13 @@ def command_analyze(args: argparse.Namespace) -> None:
         probable_threshold=args.probable_threshold,
         very_likely_threshold=args.very_likely_threshold,
         html_group_limit=args.html_group_limit,
+        analyzed_queries=len(query_indices),
     )
 
     print()
     print("ANALIZA ZAVRŠENA")
     print(f"Broj slika: {summary['total_images']}")
+    print(f"Analizirano upita: {summary['analyzed_queries']}")
     print(f"Parovi kandidati: {summary['candidate_pairs']}")
     print(f"Grupe: {summary['groups']}")
     print(f"Kategorije: {summary['category_counts']}")
@@ -913,6 +960,11 @@ def command_verify_cleaned(args: argparse.Namespace) -> None:
 
 def command_compare(args: argparse.Namespace) -> None:
     embeddings, metadata = load_inputs()
+    query_indices = select_query_indices(
+        len(metadata),
+        max_images=args.sample_size,
+        seed=args.seed,
+    )
     local_backend = LocalSimilarityBackend()
     qdrant_backend = QdrantSimilarityBackend(
         batch_size=args.batch_size,
@@ -920,14 +972,23 @@ def command_compare(args: argparse.Namespace) -> None:
     )
     qdrant_backend.validate(len(metadata))
     local_pairs = local_backend.find_pairs(
-        embeddings, metadata, args.threshold, args.top_k
+        embeddings,
+        metadata,
+        args.threshold,
+        args.top_k,
+        query_indices=query_indices,
     )
     qdrant_pairs = qdrant_backend.find_pairs(
-        embeddings, metadata, args.threshold, args.top_k
+        embeddings,
+        metadata,
+        args.threshold,
+        args.top_k,
+        query_indices=query_indices,
     )
     local_keys = {(pair.left_id, pair.right_id) for pair in local_pairs}
     qdrant_keys = {(pair.left_id, pair.right_id) for pair in qdrant_pairs}
     print("POREĐENJE BACKENDA")
+    print(f"Provereno upita: {len(query_indices)}")
     print(f"Lokalni parovi: {len(local_keys)}")
     print(f"Qdrant parovi: {len(qdrant_keys)}")
     print(f"Identični skupovi: {local_keys == qdrant_keys}")
@@ -954,7 +1015,19 @@ def build_parser() -> argparse.ArgumentParser:
     analyze_parser.add_argument("--probable-threshold", type=float, default=0.95)
     analyze_parser.add_argument("--very-likely-threshold", type=float, default=0.97)
     analyze_parser.add_argument("--top-k", type=int, default=50)
-    analyze_parser.add_argument("--batch-size", type=int, default=100)
+    analyze_parser.add_argument("--batch-size", type=int, default=256)
+    analyze_parser.add_argument(
+        "--max-images",
+        type=int,
+        default=1000,
+        help="Broj upita za analizu; 0 znači svih 113.000 (podrazumevano 1000).",
+    )
+    analyze_parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed za reproducibilan izbor uzorka.",
+    )
     analyze_parser.add_argument(
         "--exact",
         action="store_true",
@@ -988,7 +1061,9 @@ def build_parser() -> argparse.ArgumentParser:
     compare_parser = subparsers.add_parser("compare-backends")
     compare_parser.add_argument("--threshold", type=float, default=0.94)
     compare_parser.add_argument("--top-k", type=int, default=50)
-    compare_parser.add_argument("--batch-size", type=int, default=100)
+    compare_parser.add_argument("--batch-size", type=int, default=256)
+    compare_parser.add_argument("--sample-size", type=int, default=30)
+    compare_parser.add_argument("--seed", type=int, default=42)
     return parser
 
 

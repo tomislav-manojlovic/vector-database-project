@@ -22,37 +22,6 @@ Kroz korisnički interfejs mogu da se demonstriraju:
 6. testiranje stvarnih podataka iz lokalne Qdrant baze;
 7. kratka prezentacija kompletnog toka projekta.
 
-## Tok podataka
-
-```text
-STL-10 slike
-     |
-     v
-metadata.csv
-     |
-     v
-CLIP embedding (512 brojeva po slici)
-     |
-     v
-Qdrant kolekcija (Cosine sličnost)
-     |
-     +--> pretraga sličnih slika
-     +--> payload filter i CRUD
-     +--> weighted k-NN i greške modela
-     +--> slični parovi i čišćenje dataseta
-     |
-     v
-lokalni veb interfejs
-```
-
-Jedan Qdrant point predstavlja jednu sliku i sadrži:
-
-- jedinstveni ID;
-- CLIP vektor dimenzije 512;
-- payload sa putanjom slike, labelom i pomoćnim podacima.
-
-Za poređenje vektora koristi se **Cosine** metrika. Veći score znači da CLIP smatra dve slike vizuelno ili semantički sličnijim.
-
 ## Podaci koji se koriste
 
 Kompletna Qdrant kolekcija sadrži **113.000 stvarnih STL-10 slika**:
@@ -248,26 +217,6 @@ Stranica prikazuje:
 - susede koji objašnjavaju svaku pogrešnu odluku.
 
 CLIP nije dodatno treniran u ovom projektu. Klasifikacija se obavlja weighted k-NN metodom direktno nad postojećim CLIP vektorima.
-
-### Kvalitet dataseta
-
-Qdrant traži jedinstvene parove slika čija je kosinusna sličnost najmanje `0.94`.
-
-Podrazumevani pragovi su:
-
-| Kategorija | Prag |
-|---|---:|
-| sličan par | `0.94` |
-| verovatan duplikat | `0.95` |
-| veoma verovatan duplikat | `0.97` |
-
-Ista slika može da učestvuje u više parova, pa broj parova nije isto što i broj slika. Povezani parovi spajaju se u grupe. Jedna slika iz grupe bira se kao reprezentativna, a ostale dobijaju preporuku:
-
-- `keep` – zadržati reprezentativnu sliku;
-- `review` – ručno pregledati;
-- `remove_candidate` – strogi kandidat za izostavljanje iz očišćene kopije.
-
-Originalni dataset se nikada automatski ne briše. Očišćeni podaci se prave kao posebna kopija u `data\cleaned\`.
 
 ### Prezentacija
 

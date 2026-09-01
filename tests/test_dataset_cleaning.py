@@ -113,6 +113,7 @@ class DatasetCleaningTests(unittest.TestCase):
             client=client,
             collection_name=collection,
             batch_size=2,
+            allowed_ids=metadata["id"].astype(int).tolist(),
         )
 
         qdrant_backend.validate(len(metadata))

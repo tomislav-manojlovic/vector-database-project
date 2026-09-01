@@ -54,7 +54,7 @@
         <article class="panel">
           <div class="panel-heading"><div><p class="eyebrow">Arhitektura</p><h3>Tok podataka kroz sistem</h3></div><span class="tag success">Integrisano</span></div>
           <div class="pipeline">
-            <div class="pipeline-step"><span>1</span><strong>STL-10</strong><small>1.000 slika · 10 klasa</small></div>
+            <div class="pipeline-step"><span>1</span><strong>STL-10</strong><small id="pipeline-dataset-summary">Učitavam podatke...</small></div>
             <i></i><div class="pipeline-step"><span>2</span><strong>CLIP</strong><small>embedding dimenzije 512</small></div>
             <i></i><div class="pipeline-step"><span>3</span><strong>Qdrant</strong><small>Cosine + payload index</small></div>
             <i></i><div class="pipeline-step"><span>4</span><strong>Analize</strong><small>search · greške · kvalitet</small></div>
@@ -67,8 +67,8 @@
             <div class="check-list" id="resource-list"></div>
           </article>
           <article class="panel">
-            <div class="panel-heading"><div><p class="eyebrow">Provera</p><h3>Automatski testovi</h3></div><button class="button small" id="run-tests">Pokreni testove</button></div>
-            <p class="muted">Proverava search, weighted k-NN, Qdrant interfejs, grupisanje duplikata i zaštitu od pogrešnog brisanja.</p>
+            <div class="panel-heading"><div><p class="eyebrow">Provera</p><h3>Testovi stvarnih podataka</h3></div><button class="button small" id="run-tests">Pokreni testove</button></div>
+            <p class="muted">Proverava stvarnu Qdrant kolekciju, metadata, embedding vektore, payload filter, similarity search i weighted k-NN.</p>
             <pre class="console compact" id="tests-output">Klikni „Pokreni testove”.</pre>
           </article>
         </div>
@@ -100,7 +100,7 @@
       </section>
 
       <section class="view" id="view-crud">
-        <div class="section-intro"><div><span class="pill">Create · Read · Update · Delete</span><h2>Bezbedan CRUD demo</h2><p>UI menja isključivo privremene pointove sa ID-em od 9.000.000 naviše. Originalnih 1.000 pointova je zaštićeno.</p></div><button class="button danger-ghost" id="cleanup-demo">Obriši sve demo pointove</button></div>
+        <div class="section-intro"><div><span class="pill">Create · Read · Update · Delete</span><h2>Bezbedan CRUD demo</h2><p>UI menja isključivo privremene pointove sa ID-em od 9.000.000 naviše. Originalni dataset pointovi su zaštićeni.</p></div><button class="button danger-ghost" id="cleanup-demo">Obriši sve demo pointove</button></div>
         <div class="three-column controls-grid">
           <form class="panel control-card" id="create-demo-form"><p class="eyebrow">Create</p><h3>Kreiraj demo point</h3><p class="muted">Brzi demo kopira vektor postojeće slike i dodaje novi payload.</p><div class="form-row"><label>Izvorni ID<input name="source_id" type="number" value="1" min="1"></label><label>Novi ID<input name="new_id" type="number" value="9000001" min="9000000"></label></div><label>Nova labela (opciono)<input name="label" placeholder="npr. demo"></label><button class="button" type="submit">Create</button></form>
           <form class="panel control-card" id="update-demo-form"><p class="eyebrow">Update</p><h3>Izmeni payload</h3><label>Demo ID<input name="id" type="number" value="9000001" min="9000000"></label><div class="form-row"><label>Polje<input name="key" value="reviewed"></label><label>Vrednost<input name="value" value="true"></label></div><button class="button" type="submit">Update</button></form>
@@ -111,18 +111,18 @@
       </section>
 
       <section class="view" id="view-errors">
-        <div class="section-intro"><div><span class="pill">Varijanta 2</span><h2>Analiza grešaka modela</h2><p>Weighted k-NN klasifikacija, najbliži Qdrant susedi i objašnjenje pogrešnih odluka.</p></div><div class="action-group"><a class="button ghost" href="/reports/errors" target="_blank">Otvori HTML izveštaj</a><button class="button" id="run-error-analysis">Ponovi analizu</button></div></div>
+        <div class="section-intro"><div><span class="pill">Evaluacija modela</span><h2>Analiza grešaka modela</h2><p>Weighted k-NN klasifikacija, najbliži Qdrant susedi i objašnjenje pogrešnih odluka.</p></div><div class="action-group"><a class="button ghost" href="/reports/errors" target="_blank">Otvori HTML izveštaj</a><button class="button" id="run-error-analysis">Ponovi analizu</button></div></div>
         <div class="metric-grid" id="error-metrics"></div>
         <div class="two-column wide-left">
           <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Greške</p><h3>Pogrešno klasifikovane slike</h3></div></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Stvarna</th><th>Predikcija</th><th>Confidence</th><th>Dijagnoza</th><th></th></tr></thead><tbody id="errors-table"></tbody></table></div></article>
           <article class="panel detail-sticky"><div class="panel-heading"><div><p class="eyebrow">Objašnjenje</p><h3>Izabrana greška</h3></div></div><div id="error-detail" class="empty-state">Klikni „Detalji” pored neke greške.</div></article>
         </div>
-        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Matrica zabune</p><h3>Stvarna klasa → predikcija</h3></div></div><div class="table-wrap" id="confusion-matrix"></div></article>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Matrica konfuzije</p><h3>Stvarna klasa → predikcija</h3></div></div><div class="table-wrap" id="confusion-matrix"></div></article>
         <pre class="console hidden" id="error-job-output"></pre>
       </section>
 
       <section class="view" id="view-cleaning">
-        <div class="section-intro"><div><span class="pill">Varijanta 3</span><h2>Provera kvaliteta i čišćenje dataseta</h2><p>Qdrant pronalazi veoma slične parove, grupiše ih i pravi bezbednu očišćenu kopiju bez menjanja originala.</p></div><div class="action-group"><a class="button ghost" href="/reports/cleaning" target="_blank">Otvori HTML izveštaj</a><button class="button" id="run-cleaning-analysis">Ponovi analizu</button></div></div>
+        <div class="section-intro"><div><span class="pill">Kvalitet dataseta</span><h2>Provera kvaliteta i čišćenje dataseta</h2><p>Qdrant pronalazi veoma slične parove, grupiše ih i pravi bezbednu očišćenu kopiju bez menjanja originala.</p></div><div class="action-group"><a class="button ghost" href="/reports/cleaning" target="_blank">Otvori HTML izveštaj</a><button class="button" id="run-cleaning-analysis">Ponovi analizu</button></div></div>
         <div class="metric-grid" id="cleaning-metrics"></div>
         <div class="two-column wide-left">
           <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Kandidati</p><h3>Grupe sličnih slika</h3></div></div><div class="table-wrap"><table><thead><tr><th>Grupa</th><th>Slike</th><th>Reprezentant</th><th>Klase</th><th>Max score</th><th></th></tr></thead><tbody id="groups-table"></tbody></table></div></article>
@@ -136,12 +136,12 @@
         <div class="presentation-hero"><span class="pill light">Režim za odbranu</span><h2>Brzi obilazak kompletnog projekta</h2><p>Pokreni demonstraciju koja bez menjanja baze proverava ključne funkcionalnosti i priprema rezultate koje možeš redom da objasniš.</p><button class="button light large" id="run-quick-demo">Pokreni brzi demo</button></div>
         <div class="demo-layout">
           <ol class="demo-steps">
-            <li><span>1</span><div><strong>Dataset i embedding</strong><p>1.000 STL-10 slika, 10 klasa, CLIP vektori dimenzije 512.</p></div></li>
+            <li><span>1</span><div><strong>Dataset i embedding</strong><p id="presentation-dataset-summary">Učitavam podatke...</p></div></li>
             <li><span>2</span><div><strong>Qdrant kolekcija</strong><p>Point = vektor + payload; Cosine distance i label index.</p></div></li>
             <li><span>3</span><div><strong>Similarity + filter</strong><p>Top-5 najbližih slika i kombinacija sa payload filterom.</p></div></li>
             <li><span>4</span><div><strong>CRUD</strong><p>Create, Read, Update i Delete nad bezbednim demo pointom.</p></div></li>
-            <li><span>5</span><div><strong>Greške modela</strong><p>22 greške, 97,80% tačnosti i objašnjenje susedima.</p></div></li>
-            <li><span>6</span><div><strong>Čišćenje dataseta</strong><p>16 parova, 10 grupa i konzervativna kopija od 998 slika.</p></div></li>
+            <li><span>5</span><div><strong>Greške modela</strong><p id="presentation-errors-summary">Učitavam rezultate...</p></div></li>
+            <li><span>6</span><div><strong>Čišćenje dataseta</strong><p id="presentation-cleaning-summary">Učitavam rezultate...</p></div></li>
           </ol>
           <article class="panel demo-console-panel"><div class="panel-heading"><div><p class="eyebrow">Live rezultat</p><h3>Demonstracioni zapis</h3></div></div><pre class="console presentation-console" id="quick-demo-output">Spremno za demonstraciju.</pre></article>
         </div>

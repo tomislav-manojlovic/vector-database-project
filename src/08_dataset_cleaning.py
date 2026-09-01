@@ -31,8 +31,16 @@ EMBEDDING_CONFIG_PATH = ROOT_DIR / "data" / "embeddings" / "embedding_config.jso
 FULL_METADATA_PATH = ROOT_DIR / "data" / "metadata.csv"
 DEFAULT_REPORT_DIR = ROOT_DIR / "reports" / "variant3_dataset_cleaning"
 DEFAULT_CLEANED_DIR = ROOT_DIR / "data" / "cleaned"
+CLEANING_IMAGES_PER_CLASS = 100
 
-REQUIRED_COLUMNS = {"id", "image_path", "label", "embedding_index", "status"}
+REQUIRED_COLUMNS = {
+    "id",
+    "image_path",
+    "label",
+    "embedding_index",
+    "status",
+    "is_labeled",
+}
 
 
 for _stream in (sys.stdout, sys.stderr):
@@ -110,6 +118,22 @@ def load_inputs() -> tuple[np.ndarray, pd.DataFrame]:
     return selected, metadata
 
 
+def select_cleaning_sample(
+    embeddings: np.ndarray,
+    metadata: pd.DataFrame,
+    images_per_class: int = CLEANING_IMAGES_PER_CLASS,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Izaberi uravnotežen uzorak labeliranih slika za interaktivnu analizu."""
+    labeled_mask = metadata["is_labeled"].astype(str).str.lower().isin({"true", "1"})
+    labeled = metadata[labeled_mask]
+    if labeled.empty:
+        raise ValueError("Nema labeliranih slika za analizu čišćenja.")
+
+    sampled = labeled.groupby("label", sort=False).head(images_per_class).copy()
+    sampled_embeddings = embeddings[sampled.index.to_numpy(dtype=int)]
+    return sampled_embeddings, sampled.reset_index(drop=True)
+
+
 def pair_from_rows(left: pd.Series, right: pd.Series, score: float) -> SimilarPair:
     if int(left["id"]) > int(right["id"]):
         left, right = right, left
@@ -166,9 +190,10 @@ class QdrantSimilarityBackend:
         client: Any | None = None,
         collection_name: str | None = None,
         batch_size: int = 100,
+        allowed_ids: list[int] | None = None,
     ):
         try:
-            from qdrant_client.models import QueryRequest, SearchParams
+            from qdrant_client.models import Filter, HasIdCondition, QueryRequest, SearchParams
         except ImportError as exc:
             raise ImportError(
                 "Instaliraj zavisnosti: python -m pip install -r requirements.txt"
@@ -188,6 +213,11 @@ class QdrantSimilarityBackend:
         self.batch_size = batch_size
         self.query_request_class = QueryRequest
         self.search_params = SearchParams(exact=True)
+        self.query_filter = (
+            Filter(must=[HasIdCondition(has_id=allowed_ids)])
+            if allowed_ids
+            else None
+        )
 
     def validate(self, expected_count: int) -> None:
         if not self.client.collection_exists(self.collection_name):
@@ -230,6 +260,7 @@ class QdrantSimilarityBackend:
                     with_payload=["label", "image_path"],
                     with_vector=False,
                     params=self.search_params,
+                    filter=self.query_filter,
                 )
                 for index in range(start, end)
             ]
@@ -773,11 +804,18 @@ def verify_cleaned(output_dir: Path) -> dict[str, Any]:
     }
 
 
-def create_backend(name: str, batch_size: int) -> SimilarityBackend:
+def create_backend(
+    name: str,
+    batch_size: int,
+    allowed_ids: list[int] | None = None,
+) -> SimilarityBackend:
     if name == "local":
         return LocalSimilarityBackend()
     if name == "qdrant":
-        return QdrantSimilarityBackend(batch_size=batch_size)
+        return QdrantSimilarityBackend(
+            batch_size=batch_size,
+            allowed_ids=allowed_ids,
+        )
     raise ValueError(f"Nepoznat backend: {name}")
 
 
@@ -794,12 +832,26 @@ def command_validate(args: argparse.Namespace) -> None:
 
 def command_analyze(args: argparse.Namespace) -> None:
     validate_thresholds(args.threshold, args.probable_threshold, args.very_likely_threshold)
-    embeddings, metadata = load_inputs()
-    backend = create_backend(args.backend, args.batch_size)
-    backend.validate(len(metadata))
+    all_embeddings, all_metadata = load_inputs()
+    embeddings, metadata = select_cleaning_sample(all_embeddings, all_metadata)
+
+    if args.backend == "qdrant":
+        backend = create_backend(
+            args.backend,
+            args.batch_size,
+            allowed_ids=metadata["id"].astype(int).tolist(),
+        )
+        backend.validate(len(all_metadata))
+    else:
+        backend = create_backend(args.backend, args.batch_size)
+        backend.validate(len(metadata))
 
     print(
         f"Tražim parove: backend={backend.name}, threshold={args.threshold:.4f}"
+    )
+    print(
+        f"Analizira se {len(metadata)} labeliranih slika "
+        f"({CLEANING_IMAGES_PER_CLASS} po klasi)."
     )
     pairs = backend.find_pairs(
         embeddings, metadata, threshold=args.threshold, top_k=args.top_k

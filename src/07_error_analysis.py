@@ -27,6 +27,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_EMBEDDINGS_PATH = ROOT_DIR / "data" / "embeddings" / "embeddings.npy"
 DEFAULT_METADATA_PATH = ROOT_DIR / "data" / "embeddings" / "embeddings_metadata.csv"
 DEFAULT_OUTPUT_DIR = ROOT_DIR / "reports" / "error_analysis"
+ANALYSIS_IMAGES_PER_CLASS = 100
 
 CANONICAL_STL10_CLASSES = [
     "airplane",
@@ -47,6 +48,7 @@ REQUIRED_METADATA_COLUMNS = {
     "label",
     "embedding_index",
     "status",
+    "is_labeled",
 }
 
 
@@ -125,6 +127,22 @@ def load_inputs(
     return selected_embeddings, metadata
 
 
+def select_analysis_sample(
+    embeddings: np.ndarray,
+    metadata: pd.DataFrame,
+    images_per_class: int = ANALYSIS_IMAGES_PER_CLASS,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Izaberi mali, uravnotežen uzorak samo labeliranih STL-10 slika."""
+    labeled_mask = metadata["is_labeled"].astype(str).str.lower().isin({"true", "1"})
+    labeled = metadata[labeled_mask]
+    if labeled.empty:
+        raise ValueError("Nema labeliranih slika za analizu grešaka.")
+
+    sampled = labeled.groupby("label", sort=False).head(images_per_class).copy()
+    sampled_embeddings = embeddings[sampled.index.to_numpy(dtype=int)]
+    return sampled_embeddings, sampled.reset_index(drop=True)
+
+
 class LocalNeighborBackend:
     """Tačna cosine pretraga u NumPy-ju, korisna za offline proveru."""
 
@@ -177,9 +195,16 @@ class QdrantNeighborBackend:
         client: Any | None = None,
         collection_name: str | None = None,
         batch_size: int = 100,
+        labeled_only: bool = False,
     ):
         try:
-            from qdrant_client.models import QueryRequest, SearchParams
+            from qdrant_client.models import (
+                FieldCondition,
+                Filter,
+                MatchValue,
+                QueryRequest,
+                SearchParams,
+            )
         except ImportError as exc:
             raise ImportError(
                 "Qdrant backend zahteva qdrant-client. Pokreni: "
@@ -196,6 +221,18 @@ class QdrantNeighborBackend:
         self.collection_name = collection_name or "stl10_clip_images"
         self.search_params = SearchParams(exact=True)
         self.query_request_class = QueryRequest
+        self.query_filter = (
+            Filter(
+                must=[
+                    FieldCondition(
+                        key="is_labeled",
+                        match=MatchValue(value=True),
+                    )
+                ]
+            )
+            if labeled_only
+            else None
+        )
         self.batch_size = batch_size
         self._neighbor_cache: dict[int, list[Neighbor]] = {}
 
@@ -265,6 +302,7 @@ class QdrantNeighborBackend:
                     with_payload=["label", "image_path"],
                     with_vector=False,
                     params=self.search_params,
+                    filter=self.query_filter,
                 )
                 for _, vector in batch
             ]
@@ -303,6 +341,7 @@ class QdrantNeighborBackend:
             with_payload=["label", "image_path"],
             with_vectors=False,
             search_params=self.search_params,
+            query_filter=self.query_filter,
         )
         return self._convert_result(query_id, result.points, limit)
 
@@ -312,11 +351,15 @@ def build_backend(
     embeddings: np.ndarray,
     metadata: pd.DataFrame,
     qdrant_batch_size: int = 100,
+    labeled_only: bool = False,
 ) -> NeighborBackend:
     if backend_name == "local":
         return LocalNeighborBackend(embeddings, metadata)
     if backend_name == "qdrant":
-        return QdrantNeighborBackend(batch_size=qdrant_batch_size)
+        return QdrantNeighborBackend(
+            batch_size=qdrant_batch_size,
+            labeled_only=labeled_only,
+        )
     raise ValueError(f"Nepoznat backend: {backend_name}")
 
 
@@ -741,7 +784,7 @@ def generate_html_report(
   <section class="panel"><h2>Vrste pronađenih grešaka</h2><ul>{diagnosis_items}</ul></section>
   <section class="panel"><h2>Najčešće zamene klasa</h2>{common_confusions_html}</section>
   <section class="panel"><h2>Tačnost po klasama</h2>{dataframe_table(metrics, {'accuracy'})}</section>
-  <section class="panel"><h2>Confusion matrix</h2><p class="muted">Red je stvarna klasa, kolona je predikcija.</p>{confusion_html(matrix)}</section>
+  <section class="panel"><h2>Matrica konfuzije</h2><p class="muted">Red je stvarna klasa, kolona je predikcija.</p>{confusion_html(matrix)}</section>
   <h2>Primeri pogrešnih klasifikacija</h2>
   {"".join(cards) if cards else '<p>Nema grešaka za prikaz.</p>'}
 </main></body></html>"""
@@ -887,16 +930,27 @@ def command_validate(args: argparse.Namespace) -> None:
 
 
 def command_analyze(args: argparse.Namespace) -> None:
-    embeddings, metadata = load_inputs()
-    backend = build_backend(
-        args.backend,
-        embeddings,
-        metadata,
-        qdrant_batch_size=args.qdrant_batch_size,
-    )
-    backend.validate(len(metadata))
+    all_embeddings, all_metadata = load_inputs()
+    embeddings, metadata = select_analysis_sample(all_embeddings, all_metadata)
+
+    if args.backend == "qdrant":
+        backend = build_backend(
+            args.backend,
+            embeddings,
+            metadata,
+            qdrant_batch_size=args.qdrant_batch_size,
+            labeled_only=True,
+        )
+        backend.validate(len(all_metadata))
+    else:
+        backend = build_backend(args.backend, embeddings, metadata)
+        backend.validate(len(metadata))
 
     print(f"Pokrećem analizu: backend={backend.name}, k={args.k}")
+    print(
+        f"Analizira se {len(metadata)} labeliranih slika "
+        f"({ANALYSIS_IMAGES_PER_CLASS} po klasi)."
+    )
     predictions, errors, error_neighbors = analyze_dataset(
         embeddings=embeddings,
         metadata=metadata,

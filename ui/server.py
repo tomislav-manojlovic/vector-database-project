@@ -162,11 +162,19 @@ def overview() -> dict[str, Any]:
     config = read_json_file(DATA_DIR / "embeddings" / "embedding_config.json") or {}
     dataset_count = 0
     class_counts: dict[str, int] = {}
+    labeled_count = 0
+    labeled_classes = 0
+    unlabeled_count = 0
     if metadata_path.exists():
         metadata = pd.read_csv(metadata_path)
         metadata = metadata[metadata["status"] == "ok"]
         dataset_count = len(metadata)
         class_counts = clean_json(metadata["label"].value_counts().sort_index().to_dict())
+        labeled_mask = metadata["is_labeled"].astype(str).str.lower().isin({"true", "1"})
+        labeled_metadata = metadata[labeled_mask]
+        labeled_count = len(labeled_metadata)
+        labeled_classes = int(labeled_metadata["label"].nunique())
+        unlabeled_count = dataset_count - labeled_count
 
     embedding_shape = None
     if embeddings_path.exists():
@@ -192,6 +200,9 @@ def overview() -> dict[str, Any]:
             "count": dataset_count,
             "classes": len(class_counts),
             "class_counts": class_counts,
+            "labeled_count": labeled_count,
+            "labeled_classes": labeled_classes,
+            "unlabeled_count": unlabeled_count,
         },
         "embeddings": {
             "model": config.get("model_name", "openai/clip-vit-base-patch32"),
@@ -659,7 +670,9 @@ class UIHandler(BaseHTTPRequestHandler):
                 return self.send_json(cleanup_demo_points())
             if path == "/api/run/tests":
                 return self.send_json(
-                    run_project_command(["-m", "unittest", "discover", "-s", "tests", "-v"])
+                    run_project_command(
+                        ["-m", "unittest", "tests.test_real_database", "-v"]
+                    )
                 )
             if path == "/api/run/error-analysis":
                 cleanup = cleanup_demo_points()

@@ -94,18 +94,20 @@ class ErrorAnalysisTests(unittest.TestCase):
             vectors_config=VectorParams(size=2, distance=Distance.COSINE),
         )
         points = [
-            PointStruct(id=1, vector=[1.0, 0.0], payload={"label": "cat", "image_path": "1.jpg"}),
-            PointStruct(id=2, vector=[0.9, 0.1], payload={"label": "cat", "image_path": "2.jpg"}),
-            PointStruct(id=3, vector=[0.0, 1.0], payload={"label": "dog", "image_path": "3.jpg"}),
+            PointStruct(id=1, vector=[1.0, 0.0], payload={"label": "cat", "image_path": "1.jpg", "is_labeled": True}),
+            PointStruct(id=2, vector=[0.9, 0.1], payload={"label": "cat", "image_path": "2.jpg", "is_labeled": True}),
+            PointStruct(id=3, vector=[0.0, 1.0], payload={"label": "dog", "image_path": "3.jpg", "is_labeled": True}),
+            PointStruct(id=4, vector=[1.0, 0.0], payload={"label": "unlabeled", "image_path": "4.jpg", "is_labeled": False}),
         ]
         client.upsert(collection_name=collection, points=points, wait=True)
         backend = error_analysis.QdrantNeighborBackend(
             client=client,
             collection_name=collection,
             batch_size=2,
+            labeled_only=True,
         )
 
-        backend.validate(expected_count=3)
+        backend.validate(expected_count=4)
         backend.prepare_batch(
             [
                 (1, np.array([1.0, 0.0], dtype=np.float32)),

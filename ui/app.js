@@ -51,8 +51,9 @@ function activateView(name) {
 function renderOverview(data) {
   state.overview = data;
   const q = data.qdrant || {};
+  const datasetDescription = `${number(data.dataset.count)} STL-10 slika, ${data.dataset.labeled_classes} labeliranih klasa${data.dataset.unlabeled_count ? " + unlabeled split" : ""}`;
   $("#overview-metrics").innerHTML = [
-    metric("STL-10 dataset", number(data.dataset.count), `${data.dataset.classes} klasa × 100 slika`, true),
+    metric("STL-10 dataset", number(data.dataset.count), `${data.dataset.labeled_classes} labeliranih klasa + unlabeled split`, true),
     metric("CLIP embedding", `${data.embeddings.dimension}D`, data.embeddings.model.split("/").pop()),
     metric("Qdrant pointovi", number(q.count), q.connected ? `${q.distance || "Cosine"} · kolekcija aktivna` : "Qdrant nije dostupan", q.connected),
     metric("Tačnost k-NN", data.error_analysis ? percent(data.error_analysis.accuracy) : "—", data.error_analysis ? `${data.error_analysis.error_count} pronađene greške` : "Analiza nije pokrenuta")
@@ -69,6 +70,14 @@ function renderOverview(data) {
   const dot = $("#sidebar-status-dot"); dot.className = `status-dot ${q.connected && q.collection_exists ? "online" : "offline"}`;
   $("#sidebar-status").textContent = q.connected && q.collection_exists ? "Qdrant je povezan" : "Qdrant nije dostupan";
   $("#sidebar-count").textContent = q.connected ? `${number(q.count)} pointova · ${q.distance || "Cosine"}` : (q.error || "Pokreni Docker Desktop");
+  $("#pipeline-dataset-summary").textContent = `${number(data.dataset.count)} slika · ${data.dataset.labeled_classes} labeliranih klasa + unlabeled`;
+  $("#presentation-dataset-summary").textContent = `${datasetDescription}, CLIP vektori dimenzije ${data.embeddings.dimension}.`;
+  $("#presentation-errors-summary").textContent = data.error_analysis
+    ? `${data.error_analysis.error_count} grešaka, ${percent(data.error_analysis.accuracy)} tačnosti i objašnjenje susedima.`
+    : "Analiza grešaka još nije pokrenuta.";
+  $("#presentation-cleaning-summary").textContent = data.cleaning
+    ? `${data.cleaning.candidate_pairs} parova, ${data.cleaning.groups} grupa i ${data.cleaning.recommended_removals} strogih kandidata.`
+    : "Analiza čišćenja još nije pokrenuta.";
   renderCards($("#demo-points"), data.demo_points, "Nema privremenih demo pointova.");
 }
 
@@ -151,7 +160,7 @@ async function runQuickDemo() {
   const button = $("#run-quick-demo"), output = $("#quick-demo-output"); setBusy(button, true, "Demo je u toku..."); output.textContent = "POČETAK DEMONSTRACIJE\n\n";
   const log = text => { output.textContent += `${text}\n`; output.scrollTop = output.scrollHeight; };
   try {
-    const o = await api("/api/overview"); log(`1. DATASET: ${o.dataset.count} slika, ${o.dataset.classes} klasa.`); log(`   CLIP: ${o.embeddings.dimension}D, normalizacija = ${o.embeddings.normalized}.`); log(`2. QDRANT: ${o.qdrant.count} pointova, ${o.qdrant.distance}, kolekcija ${o.qdrant.collection}.\n`);
+    const o = await api("/api/overview"); renderOverview(o); log(`1. DATASET: ${o.dataset.count} slika, ${o.dataset.labeled_classes} labeliranih klasa + unlabeled split.`); log(`   CLIP: ${o.embeddings.dimension}D, normalizacija = ${o.embeddings.normalized}.`); log(`2. QDRANT: ${o.qdrant.count} pointova, ${o.qdrant.distance}, kolekcija ${o.qdrant.collection}.\n`);
     const similar = await api("/api/similar?id=1&top_k=5"); log(`3. SIMILARITY SEARCH za ID 1:`); similar.results.forEach((r,i) => log(`   ${i+1}. ID ${r.id} · ${r.label} · score ${r.score.toFixed(4)}`));
     const filtered = await api("/api/filter?label=dog&limit=5"); log(`\n4. PAYLOAD FILTER label=dog: vraćeno ${filtered.results.length} rezultata.`);
     const errors = await api("/api/errors?limit=30"); log(`5. ANALIZA GREŠAKA: ${errors.summary?.error_count ?? "—"} greške, tačnost ${errors.summary ? percent(errors.summary.accuracy) : "—"}.`);

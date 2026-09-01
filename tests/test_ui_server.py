@@ -2,6 +2,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "ui" / "server.py"
@@ -67,12 +68,30 @@ class UIServerTests(unittest.TestCase):
             ui_server.delete_demo_point(1)
 
     def test_reports_are_available_to_ui(self):
-        errors = ui_server.error_data(5)
-        cleaning = ui_server.cleaning_data()
-        self.assertIsNotNone(errors["summary"])
-        self.assertGreater(len(errors["errors"]), 0)
-        self.assertIsNotNone(cleaning["summary"])
-        self.assertGreater(len(cleaning["groups"]), 0)
+        def fake_read_json(path):
+            if path.name == "cleaning_manifest.json":
+                return {"cleaned_count": 2}
+            if path.parent.name == "error_analysis":
+                return {"error_count": 1}
+            return {"groups": 1}
+
+        def fake_dataframe_records(path, limit=None):
+            if path.name == "errors.csv":
+                return [{"id": 1, "true_label": "cat", "predicted_label": "dog"}]
+            if path.name == "group_summary.csv":
+                return [{"group_id": 1, "group_size": 2}]
+            return [{"left_id": 1, "right_id": 2, "score": 0.99}]
+
+        with patch.object(ui_server, "read_json_file", side_effect=fake_read_json), patch.object(
+            ui_server, "dataframe_records", side_effect=fake_dataframe_records
+        ):
+            errors = ui_server.error_data(5)
+            cleaning = ui_server.cleaning_data()
+
+        self.assertEqual(errors["summary"]["error_count"], 1)
+        self.assertEqual(len(errors["errors"]), 1)
+        self.assertEqual(cleaning["summary"]["groups"], 1)
+        self.assertEqual(len(cleaning["groups"]), 1)
 
 
 if __name__ == "__main__":

@@ -1,296 +1,454 @@
-# Qdrant alat za računarski vid
+# Qdrant Image Lab
 
-## Pregled projekta
+Studentski projekat iz baza podataka i računarskog vida koji prikazuje kako se slike mogu predstaviti vektorima, sačuvati u vektorskoj bazi i pretraživati prema vizuelnoj sličnosti.
 
-Ovaj projekat objedinjuje računarski vid i vektorsku bazu podataka u jedan reproduktivan sistem za analizu slika. Sistem priprema uravnotežen podskup STL-10 trening skupa, svaku sliku predstavlja normalizovanim CLIP embeddingom, čuva vektore u Qdrantu i omogućava pretragu, analizu grešaka modela, čišćenje skupa podataka i kontrolisane CRUD operacije putem komandne linije i lokalnog veb interfejsa.
+Projekat koristi:
 
-Implementirana su sva tri zahtevana nivoa projekta:
+- **STL-10** kao skup slika;
+- **CLIP** za generisanje vektora dimenzije 512;
+- **Qdrant** kao vektorsku bazu podataka;
+- **weighted k-NN** za klasifikaciju i analizu grešaka;
+- jednostavan lokalni **HTML/CSS/JavaScript UI** sa Python HTTP serverom.
 
-1. **Pretraga sličnih slika** koristi kosinusnu sličnost u Qdrantu za pronalaženje slika bliskih upitnom vektoru.
-2. **Analiza grešaka modela** koristi najbliže susede za klasifikaciju slika i objašnjavanje pogrešnih odluka.
-3. **Čišćenje skupa podataka** otkriva grupe veoma sličnih slika i pravi pregledanu, odvojenu očišćenu kopiju bez menjanja izvornog skupa.
+## Šta projekat omogućava
 
-Embedding slike je sažet numerički prikaz njenog vizuelnog sadržaja. Slike koje CLIP smatra vizuelno ili semantički povezanim imaju bliske vektore dimenzije 512. Zbog toga isti prikaz može da se koristi za pretragu, lokalnu analizu klasifikacije i otkrivanje redundantnih podataka.
+Kroz korisnički interfejs mogu da se demonstriraju:
 
-## Glavne funkcionalnosti
+1. pregled stanja dataseta, embeddinga i Qdrant kolekcije;
+2. pretraga najsličnijih slika i filtriranje prema klasi;
+3. bezbedan CRUD nad privremenim demo pointovima;
+4. evaluacija weighted k-NN modela i analiza pogrešnih klasifikacija;
+5. pronalaženje veoma sličnih slika i pravljenje očišćene kopije dataseta;
+6. testiranje stvarnih podataka iz lokalne Qdrant baze;
+7. kratka prezentacija kompletnog toka projekta.
 
-- reproduktivno preuzimanje STL-10 skupa, izvoz slika i generisanje metapodataka;
-- paketno generisanje CLIP embeddinga uz obradu neispravnih slika;
-- kreiranje Qdrant kolekcije, indeksiranje payload-a, paketni import i verifikacija;
-- dohvatanje pointova, filtriranje payload-a, kosinusna pretraga i kontrolisane CRUD operacije;
-- klasifikacija ponderisanim k najbližih suseda i dijagnostika grešaka;
-- precizni lokalni NumPy backend za offline analizu i poređenje sa Qdrantom;
-- grupisanje duplikata i približnih duplikata pomoću podesivih pragova;
-- evidentiranje odluka pregleda i pravljenje odvojenog očišćenog skupa;
-- veb interfejs bez dodatnog framework-a, poslužen Python standardnom bibliotekom.
-
-## Arhitektura sistema
+## Tok podataka
 
 ```text
-STL-10 trening skup
-        |
-        v
-JPEG slike + data/metadata.csv
-        |
-        v
-CLIP openai/clip-vit-base-patch32
-        |
-        v
-L2-normalizovani vektori dimenzije 512
-        |
-        +---------------------> NumPy offline validacija
-        |
-        v
-Qdrant: stl10_clip_images (Cosine)
-        |
-        +--> pretraga sličnosti i CRUD
-        +--> weighted k-NN analiza grešaka
-        +--> grupisanje sličnih slika i čišćenje
-        |
-        v
-Python HTTP server <--> statički HTML/CSS/JavaScript interfejs
+STL-10 slike
+     |
+     v
+metadata.csv
+     |
+     v
+CLIP embedding (512 brojeva po slici)
+     |
+     v
+Qdrant kolekcija (Cosine sličnost)
+     |
+     +--> pretraga sličnih slika
+     +--> payload filter i CRUD
+     +--> weighted k-NN i greške modela
+     +--> slični parovi i čišćenje dataseta
+     |
+     v
+lokalni veb interfejs
 ```
 
-UI server u `ui/server.py` poslužuje statičke fajlove, direktno poziva Qdrant za interaktivne upite, čita generisane CSV/JSON izveštaje i pokreće skripte za analizu kao podprocese. Server se vezuje za `127.0.0.1`. Podrazumevani traženi port je `8765`, a ako je zauzet, bira se prvi slobodan port u narednih 30 portova.
+Jedan Qdrant point predstavlja jednu sliku i sadrži:
 
-## Skup podataka
+- jedinstveni ID;
+- CLIP vektor dimenzije 512;
+- payload sa putanjom slike, labelom i pomoćnim podacima.
 
-Skripta `scripts/prepare_dataset.py` preuzima **STL-10 trening skup** pomoću `torchvision.datasets.STL10`. Bira prvih 100 primera iz svake od deset klasa — airplane, bird, car, cat, deer, dog, horse, monkey, ship i truck — odnosno ukupno 1.000 slika.
+Za poređenje vektora koristi se **Cosine** metrika. Veći score znači da CLIP smatra dve slike vizuelno ili semantički sličnijim.
 
-Skripta ponovo pravi `data/images/stl10/`, upisuje RGB JPEG slike grupisane po klasama i generiše:
+## Podaci koji se koriste
 
-- `data/metadata.csv`: ID, relativnu putanju slike, labelu, numeričku labelu, naziv skupa, podelu, izvorni indeks i naziv fajla;
-- `data/metadata_sample.csv`: po tri primera metapodataka za svaku klasu.
+Kompletna Qdrant kolekcija sadrži **113.000 stvarnih STL-10 slika**:
 
-Pokretanje skripte za pripremu zamenjuje postojeći direktorijum izvezenih slika. Preuzeti izvorni skup i izvezene slike predstavljaju generisane resurse i ignorisani su u Gitu.
+| Deo skupa | Broj slika | Labele |
+|---|---:|---|
+| `train` | 5.000 | 10 klasa |
+| `test` | 8.000 | 10 klasa |
+| `unlabeled` | 100.000 | bez poznate klase |
+| **Ukupno** | **113.000** | 10 klasa + `unlabeled` |
 
-## Pipeline za generisanje embeddinga
+Deset labeliranih klasa su: `airplane`, `bird`, `car`, `cat`, `deer`, `dog`, `horse`, `monkey`, `ship` i `truck`.
 
-`src/generate_embeddings.py` učitava `openai/clip-vit-base-patch32` pomoću biblioteke Hugging Face Transformers. Skripta razrešava putanju svakog metapodatka, obrađuje ispravne slike u paketima, dobija CLIP obeležja, pretvara ih u `float32` i L2-normalizuje svaki vektor. Nedostajuće ili nečitljive slike evidentiraju se kao preskočene i ne dodeljuje im se vektor.
+Interaktivna analiza grešaka i analiza kvaliteta koriste uravnotežen uzorak od **1.000 stvarnih slika**, odnosno po 100 labeliranih slika iz svake klase. Uzorak nije mock i čita se iz istih metapodataka, embeddinga i Qdrant kolekcije kao ostatak aplikacije.
 
-Podrazumevani izlazni direktorijum `data/embeddings/` sadrži:
+Uzorak od 1.000 slika je izabran zato što:
 
-- `embeddings.npy`: matricu vektora oblika `N x 512`;
-- `embeddings_metadata.csv`: polja `id`, `image_path`, `label`, `embedding_index` i `status`;
-- `embedding_config.json`: naziv modela, dimenziju, informaciju o normalizaciji, metriku, broj slika i vreme generisanja.
+- svaka klasa ima isti broj primera;
+- analiza se dovoljno brzo izvršava tokom demonstracije;
+- rezultat je ponovljiv i lak za objašnjavanje;
+- poređenje svih mogućih parova nad 113.000 slika bilo bi nepotrebno sporo za studentsku demonstraciju.
 
-U Qdrant se uvoze samo redovi metapodataka čiji je status `ok`. Dostavljena konfiguracija opisuje 1.000 normalizovanih vektora dimenzije 512.
-
-## Vektorska baza
-
-Docker Compose pokreće `qdrant/qdrant:v1.18.2`. HTTP i gRPC su podrazumevano lokalno dostupni na portovima `6333` i `6334`, dok se trajni podaci baze čuvaju u imenovanom Docker volumenu `qdrant-image-search-storage`.
-
-Aplikacija koristi sledeći ugovor kolekcije:
-
-| Podešavanje | Vrednost |
-|---|---|
-| Podrazumevana kolekcija | `stl10_clip_images` |
-| Dimenzija vektora | `512` |
-| Metrika rastojanja | Cosine |
-| Payload | `id`, `image_path`, `label` |
-| Payload indeks | keyword indeks nad poljem `label` |
-| Veličina import paketa | `100` |
-
-Vrednosti `QDRANT_URL`, `QDRANT_API_KEY` i `QDRANT_COLLECTION` mogu da se zadaju u korenom `.env` fajlu ili u `infra/.env`. Dimenzija vektora i metrika fiksirane su Python ugovorom kolekcije. `infra/.env.example` dokumentuje i promenljive za Docker adresu i portove.
-
-## Implementirani nivoi projekta
-
-### Nivo 1: pretraga sličnih slika
-
-`src/06_queries.py` može da dohvati sačuvani vektor prema ID-u pointa i pošalje ga Qdrantu kao kosinusni upit. Sama upitna slika isključuje se iz rezultata, rezultati su poređani prema score vrednosti, a opcioni `label` filter ograničava prostor pretrage. Isti modul može CLIP modelom da generiše embedding nove slike, upiše je kao Qdrant point i zatim izvrši pretragu.
-
-Sloj za upite podržava i dohvatanje pointa, filtriranje po labeli, izmenu payload-a, eksplicitno brisanje uz potvrdu i bezbednu demonstraciju brisanja privremenog pointa.
-
-### Nivo 2: analiza grešaka modela
-
-Projekat ne sadrži checkpoint posebno treniranog klasifikatora. `src/07_error_analysis.py` implementira ponderisani k-NN klasifikator nad postojećim CLIP prostorom:
-
-1. podrazumevano pronalazi pet najbližih drugih slika;
-2. negativne kosinusne score vrednosti ograničava na nulu i koristi ih kao težine glasova klasa;
-3. bira klasu sa najvećim ukupnim glasom;
-4. poredi predikciju sa STL-10 labelom;
-5. za svaku grešku čuva susede i heurističku dijagnozu.
-
-Qdrant upiti se podrazumevano šalju paketno i koriste preciznu pretragu. Lokalni NumPy backend sa kosinusnom sličnošću omogućava offline validaciju i poređenje backend-a.
-
-Dijagnoze grešaka predstavljaju heuristike za ručni pregled, a ne automatske ispravke labela:
-
-- `possible_annotation_issue`: svi susedi podržavaju jednu drugu klasu, nijedan ne podržava stvarnu klasu, a prosečna sličnost je najmanje `0.92`;
-- `ambiguous_or_outlier`: najbolji sused ima score ispod `0.55` ili su dokazi suseda na drugi način rasuti;
-- `class_confusion`: najmanje 60% suseda podržava predviđenu klasu;
-- `boundary_case`: i stvarna i predviđena klasa imaju lokalnu podršku, ali nisu ispunjena stroža pravila.
-
-Analiza upisuje HTML, JSON i CSV artefakte u `reports/error_analysis/`, uključujući predikcije, greške, detalje suseda, matricu konfuzije i metrike po klasama.
-
-### Nivo 3: čišćenje skupa podataka
-
-`src/08_dataset_cleaning.py` traži parove slika slične po kosinusnoj metrici koristeći Qdrant ili lokalni precizni backend. Podrazumevane kategorije su:
-
-- `very_similar`: score najmanje `0.94`;
-- `probable_duplicate`: score najmanje `0.95`;
-- `very_likely_duplicate`: score najmanje `0.97`.
-
-Kandidatski parovi spajaju se u povezane grupe. Za svaku grupu bira se reprezentativna slika. Slike sa istom labelom koje zadovoljavaju strogi prag mogu biti preporučene kao kandidati za uklanjanje. Parovi sa različitim labelama čuvaju se za ručni pregled, jer sama sličnost ne može da dokaže grešku u anotaciji.
-
-Analiza upisuje tabele za pregled i HTML izveštaj u `reports/variant3_dataset_cleaning/`. Komanda `build-clean-dataset` čita odluke pregleda i pravi odvojenu kopiju u `data/cleaned/`, koja sadrži filtrirane vektore, ponovo mapirane indekse embeddinga, metapodatke, konfiguraciju i manifest čišćenja. Izvorne slike i izvorni embedding fajlovi nikada se ne menjaju.
-
-Ovaj nivo je usmeren na duplikate i veoma redundantne uzorke. Projekat **nema** zaseban globalni postupak za otkrivanje outlier-a u celom skupu; sumnjivi slučajevi sa niskom sličnošću izdvajaju se heuristikom analize grešaka iz nivoa 2.
+Rezultati u UI-ju nisu ručno upisani. Broj grešaka, tačnost, broj sličnih parova, grupa i kandidata čitaju se iz poslednje pokrenute analize.
 
 ## Preduslovi
 
-- Windows za priloženi `.bat` launcher; Python komande rade i u drugim podržanim okruženjima;
-- Python 3.10 ili druga verzija kompatibilna sa navedenim bibliotekama;
-- Docker Desktop sa Docker Compose podrškom za Qdrant;
-- dovoljno prostora za STL-10, izvezene slike, keš modela, embeddinge i izveštaje;
-- pristup internetu prilikom prvog preuzimanja skupa i CLIP modela.
+Pre prvog pokretanja potrebno je imati:
 
-Python zavisnosti navedene su u `requirements.txt`: pandas, NumPy, PyTorch, torchvision, Transformers, Pillow, tqdm, qdrant-client 1.18.x i python-dotenv.
+- Windows i PowerShell;
+- Python 3.10 ili kompatibilnu noviju verziju;
+- Docker Desktop;
+- internet vezu za prvo preuzimanje STL-10 dataseta, Docker image-a i CLIP modela;
+- dovoljno slobodnog prostora za 113.000 slika i njihove embeddinge.
 
-## Prvo podešavanje
+Sve naredne komande pokreću se iz **korena projekta**:
 
-Sledeće komande treba pokrenuti iz korena repozitorijuma u PowerShell-u:
+```text
+D:\BazeVidProj\vector-database-project
+```
+
+Ako je terminal trenutno u `src` direktorijumu, prvo se treba vratiti jedan nivo:
+
+```powershell
+cd ..
+```
+
+## Prvo pokretanje projekta
+
+Ovaj postupak se radi prilikom prvog podešavanja na novom računaru ili nakon potpuno novog kloniranja projekta.
+
+### 1. Otvoriti Docker Desktop
+
+Sačekati da Docker Desktop završi pokretanje. Qdrant će kasnije biti pokrenut iz deploy skripte.
+
+### 2. Napraviti Python virtuelno okruženje
+
+U PowerShell terminalu, iz korena projekta:
 
 ```powershell
 py -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt
-Copy-Item infra\.env.example infra\.env
-docker compose -f infra\docker-compose.yml up -d
 ```
 
-Kopiranje environment fajla nije obavezno ako podrazumevane vrednosti odgovaraju okruženju. Popunjen `.env` sa pristupnim podacima ne treba commit-ovati.
+Aktiviranje okruženja nije obavezno zato što naredne komande direktno koriste Python iz `.venv` direktorijuma.
 
-### Priprema podataka i inicijalizacija Qdranta
+### 3. Instalirati Python biblioteke
 
-Za potpuno ponovno generisanje, faze treba pokrenuti sledećim redosledom:
+```powershell
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+### 4. Napraviti lokalni konfiguracioni fajl
+
+```powershell
+Copy-Item infra\.env.example infra\.env
+```
+
+Za lokalni rad nije potrebno menjati podrazumevane vrednosti. Qdrant je dostupan samo na lokalnom računaru preko adrese `http://localhost:6333`.
+
+Ako `infra\.env` već postoji, ovaj korak se preskače.
+
+### 5. Preuzeti i pripremiti STL-10 dataset
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\prepare_dataset.py
+```
+
+Skripta preuzima STL-10, izvozi slike i pravi `data\metadata.csv`.
+
+### 6. Generisati CLIP embeddinge
+
+```powershell
 .\.venv\Scripts\python.exe src\generate_embeddings.py
-.\.venv\Scripts\python.exe src\check_embeddings.py
-.\.venv\Scripts\python.exe src\02_create_collection.py --recreate
-.\.venv\Scripts\python.exe src\04_import_to_qdrant.py
-.\.venv\Scripts\python.exe src\05_verify_import.py
 ```
 
-Opcija `--recreate` briše i ponovo pravi samo konfigurisanu projektnu kolekciju. Treba je izostaviti kada postojeća kolekcija mora da se sačuva. Priprema skupa i generisanje embeddinga mogu da se preskoče tokom normalnog korišćenja ako generisani fajlovi već postoje i odgovaraju sadržaju kolekcije.
+Ovo je najduži korak jer se obrađuje 113.000 slika. Rezultati se čuvaju u `data\embeddings\` i ne generišu se ponovo pri svakom pokretanju.
 
-Ne postoji faza treniranja ili fine-tuninga: CLIP je unapred treniran, a klasifikacija koristi ponderisani k-NN u vreme upita.
+Ako su `data\metadata.csv`, `data\embeddings\embeddings.npy` i ostali embedding fajlovi već pripremljeni i odgovaraju trenutnom datasetu, koraci 5 i 6 mogu da se preskoče.
 
-## Pokretanje kompletne aplikacije
-
-1. Pokrenuti Docker Desktop i proveriti da Qdrant radi:
-
-   ```powershell
-   docker compose -f infra\docker-compose.yml up -d
-   ```
-
-2. Iz korena repozitorijuma pokrenuti aplikaciju:
-
-   ```powershell
-   .\START_UI.bat
-   ```
-
-Launcher proverava postojanje `.venv\Scripts\python.exe` i pokreće `ui\server.py`. On **ne pokreće** Docker i ne priprema niti uvozi podatke. Server otvara lokalni dashboard u podrazumevanom pregledaču. U dashboard-u je moguće pregledati stanje sistema, pretraživati prema ID-u ili labeli, izvršavati pretragu sličnosti, koristiti CRUD operacije ograničene na demonstracione ID-eve, ponavljati analize, pregledati greške klasifikacije i grupe suseda, napraviti očišćenu kopiju i pokrenuti testove.
-
-## Pokretanje pojedinačnih tokova
-
-### Pretraga i CRUD
+### 7. Pokrenuti linearni deploy
 
 ```powershell
-.\.venv\Scripts\python.exe src\06_queries.py check
-.\.venv\Scripts\python.exe src\06_queries.py get 1 --with-vector
-.\.venv\Scripts\python.exe src\06_queries.py filter dog --limit 5
-.\.venv\Scripts\python.exe src\06_queries.py similar 1 --top-k 5
-.\.venv\Scripts\python.exe src\06_queries.py similar 1 --top-k 5 --label bird
-.\.venv\Scripts\python.exe src\06_queries.py create-from-image data\images\stl10\dog\dog_0001.jpg dog --id 2001
-.\.venv\Scripts\python.exe src\06_queries.py update 2001 reviewed true
-.\.venv\Scripts\python.exe src\06_queries.py delete 2001
-.\.venv\Scripts\python.exe src\06_queries.py delete-test
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
 ```
 
-### Analiza grešaka
+Deploy skripta izvršava korake redom i zaustavlja se ako neki od njih ne uspe:
 
-```powershell
-.\.venv\Scripts\python.exe src\07_error_analysis.py validate --backend qdrant
-.\.venv\Scripts\python.exe src\07_error_analysis.py analyze --backend qdrant --k 5
-.\.venv\Scripts\python.exe src\07_error_analysis.py inspect 3 --backend qdrant --k 5
-.\.venv\Scripts\python.exe src\07_error_analysis.py compare-backends --sample-size 30 --k 5
-powershell -ExecutionPolicy Bypass -File scripts\demo_error_analysis.ps1
-```
+1. pokreće Qdrant kontejner;
+2. čeka da Qdrant bude spreman;
+3. proverava lokalne embedding fajlove;
+4. kreira kolekciju ako ne postoji;
+5. uvozi podatke u Qdrant;
+6. proverava broj pointova i konfiguraciju kolekcije;
+7. pokreće korisnički interfejs.
 
-### Čišćenje skupa podataka
-
-```powershell
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py validate --backend qdrant
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py analyze --backend qdrant
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py inspect-group 1
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py compare-backends
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py build-clean-dataset
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py verify-cleaned
-powershell -ExecutionPolicy Bypass -File scripts\demo_variant3.ps1
-```
-
-Opcija `--help` svake komande prikazuje dostupne putanje, veličine paketa, backend-e i pragove.
-
-## Struktura repozitorijuma
+Na kraju se u pregledaču otvara:
 
 ```text
-.
-|-- data/                 metapodaci i generisani skupovi/embeddinzi
-|-- infra/                Qdrant Compose konfiguracija i alati za povezivanje
-|-- reports/              generisani rezultati analiza
-|-- scripts/              priprema skupa i demonstracioni tokovi
-|-- src/                  embedding, Qdrant, upiti, analiza i čišćenje
-|-- tests/                unit i integracioni testovi sa lokalnim podacima
-|-- ui/                   lokalni HTTP server i statička veb aplikacija
-|-- requirements.txt      manifest Python zavisnosti
-`-- START_UI.bat          Windows launcher za UI
+http://127.0.0.1:8765
 ```
 
-## Generisani i ignorisani fajlovi
+Ako je port `8765` zauzet, server bira prvi slobodan port iz narednih 30 portova i ispisuje njegovu adresu u terminalu.
 
-Sledeći resursi namerno su isključeni iz kontrole verzija zato što su preuzeti, lokalni, veliki ili reproduktivni:
+## Svako naredno pokretanje
 
-- `.venv/`, Python cache, test cache, coverage fajlovi, IDE podešavanja i logovi;
-- `.env` i `infra/.env`;
-- `data/raw/` i `data/images/`;
-- `data/embeddings/*.npy` i privremeni direktorijumi za testiranje embeddinga;
-- ceo `data/cleaned/`;
-- generisani direktorijumi izveštaja analize grešaka i čišćenja;
-- lokalne frontend zavisnosti i build direktorijumi ako se kasnije uvedu.
+Kada su dataset, embedding fajlovi i Qdrant kolekcija već napravljeni, nije potrebno ponovo generisati podatke niti raditi kompletan deploy.
 
-Izvorni kod, manifesti zavisnosti, `infra/.env.example`, Docker konfiguracija, uzorci metapodataka, konfiguracija i metapodaci embeddinga potrebni za opis importa, kao i startup skripte, treba da ostanu pod kontrolom verzija. Qdrant podatke čuva u imenovanom Docker volumenu, a ne u repozitorijumu.
+### Preporučeni postupak
 
-## Validacija i primer toka
+1. Pokrenuti Docker Desktop.
+2. Otvoriti PowerShell u korenu projekta.
+3. Pokrenuti postojeći Qdrant kontejner:
 
-Lake provere koje ne generišu ponovo skup ili model su:
+```powershell
+docker compose -f infra\docker-compose.yml up -d
+```
+
+4. Pokrenuti UI:
+
+```powershell
+.\START_UI.bat
+```
+
+Pošto Qdrant kontejner ima pravilo `restart: unless-stopped`, često je dovoljno pokrenuti Docker Desktop i zatim `START_UI.bat`. Posebna Docker komanda iznad je bezbedna provera da je kontejner zaista pokrenut.
+
+### Kada ponovo koristiti deploy skriptu
+
+`scripts\deploy.ps1` treba ponovo pokrenuti kada:
+
+- Qdrant kolekcija još ne postoji;
+- obrisan je Docker volume;
+- promenjeni su metadata ili embedding fajlovi;
+- potrebno je ponovo uvesti i proveriti sve pointove;
+- projekat se podešava na novom računaru.
+
+Za obično otvaranje aplikacije deploy nije potreban.
+
+## Zaustavljanje aplikacije
+
+UI se zaustavlja u terminalu kombinacijom:
+
+```text
+Ctrl+C
+```
+
+Ako se pojavi pitanje:
+
+```text
+Terminate batch job (Y/N)?
+```
+
+unosi se `Y` i pritisne Enter. To samo zaustavlja UI proces i ne briše podatke.
+
+Qdrant se opciono može zaustaviti komandom:
+
+```powershell
+docker compose -f infra\docker-compose.yml stop
+```
+
+Podaci ostaju sačuvani u Docker volumenu i dostupni su pri sledećem pokretanju.
+
+## Delovi korisničkog interfejsa
+
+### Pregled
+
+Prikazuje broj slika, dimenziju embeddinga, stanje Qdranta, poslednje rezultate analiza i testove stvarnih podataka.
+
+### Pretraga
+
+Omogućava dohvatanje slike prema ID-u, payload filtriranje prema labeli i prikaz najsličnijih slika.
+
+### CRUD demo
+
+Create, Read, Update i Delete izvršavaju se samo nad privremenim pointovima čiji ID počinje od `9.000.000`. Originalni dataset pointovi su zaštićeni od izmene i brisanja.
+
+### Evaluacija modela
+
+Weighted k-NN za svaku od 1.000 analiziranih slika pronalazi pet najbližih drugih labeliranih slika. Kosinusni score suseda koristi se kao težina glasa klase.
+
+Stranica prikazuje:
+
+- broj tačnih i pogrešnih klasifikacija;
+- ukupnu tačnost;
+- matricu konfuzije;
+- susede koji objašnjavaju svaku pogrešnu odluku.
+
+CLIP nije dodatno treniran u ovom projektu. Klasifikacija se obavlja weighted k-NN metodom direktno nad postojećim CLIP vektorima.
+
+### Kvalitet dataseta
+
+Qdrant traži jedinstvene parove slika čija je kosinusna sličnost najmanje `0.94`.
+
+Podrazumevani pragovi su:
+
+| Kategorija | Prag |
+|---|---:|
+| sličan par | `0.94` |
+| verovatan duplikat | `0.95` |
+| veoma verovatan duplikat | `0.97` |
+
+Ista slika može da učestvuje u više parova, pa broj parova nije isto što i broj slika. Povezani parovi spajaju se u grupe. Jedna slika iz grupe bira se kao reprezentativna, a ostale dobijaju preporuku:
+
+- `keep` – zadržati reprezentativnu sliku;
+- `review` – ručno pregledati;
+- `remove_candidate` – strogi kandidat za izostavljanje iz očišćene kopije.
+
+Originalni dataset se nikada automatski ne briše. Očišćeni podaci se prave kao posebna kopija u `data\cleaned\`.
+
+### Prezentacija
+
+„Brzi demo” redom prikazuje stanje dataseta, Qdrant kolekciju, similarity search, payload filter, poslednju analizu grešaka i poslednju analizu kvaliteta. Prikazani brojevi dolaze iz trenutnih podataka i izveštaja.
+
+## Pokretanje analiza iz terminala
+
+Iste analize koje pokreće UI mogu ručno da se pokrenu iz korena projekta.
+
+### Analiza grešaka modela
+
+```powershell
+.\.venv\Scripts\python.exe src\07_error_analysis.py analyze --backend qdrant --k 5
+```
+
+Izveštaji se čuvaju u:
+
+```text
+reports\error_analysis\
+```
+
+### Analiza kvaliteta dataseta
+
+```powershell
+.\.venv\Scripts\python.exe src\08_dataset_cleaning.py analyze --backend qdrant
+```
+
+Izveštaji se čuvaju u:
+
+```text
+reports\variant3_dataset_cleaning\
+```
+
+### Pravljenje i provera očišćene kopije
+
+```powershell
+.\.venv\Scripts\python.exe src\08_dataset_cleaning.py build-clean-dataset
+.\.venv\Scripts\python.exe src\08_dataset_cleaning.py verify-cleaned
+```
+
+## Testiranje
+
+Dugme **Pokreni testove** na glavnoj stranici pokreće testove nad stvarnim lokalnim podacima i stvarnom Qdrant kolekcijom. Ti testovi proveravaju:
+
+- broj pointova i dimenziju kolekcije;
+- slaganje stvarnog vektora sa lokalnim embedding fajlom;
+- payload filter i similarity search;
+- weighted k-NN nad stvarnim susedima.
+
+Isti testovi mogu da se pokrenu iz terminala:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest tests.test_real_database -v
+```
+
+Svi testovi zajedno (unit testovi i testovi stvarne baze) pokreću se komandom:
 
 ```powershell
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-.\.venv\Scripts\python.exe -m compileall -q src scripts infra\scripts ui tests
-.\.venv\Scripts\python.exe src\check_embeddings.py
-.\.venv\Scripts\python.exe src\07_error_analysis.py validate --backend local
-.\.venv\Scripts\python.exe src\08_dataset_cleaning.py validate --backend local
 ```
 
-Za demonstraciju kompletnog toka treba proveriti import, otvoriti UI, izvršiti pretragu sličnosti prema ID-u, pregledati grešku i njene susede, pregledati grupu za čišćenje, napraviti očišćenu kopiju i verifikovati je. Generisani brojevi i rezultati analiza zavise od trenutnih podataka, pragova, odluka pregleda i sadržaja kolekcije, pa dokumentacija ne garantuje konkretne metrike.
+## Struktura direktorijuma
 
-## Ograničenja
+```text
+vector-database-project/
+|
+|-- data/
+|   |-- images/stl10/                 izvezene STL-10 slike
+|   |-- embeddings/                   CLIP vektori i njihovi metapodaci
+|   |-- cleaned/                      opciona očišćena kopija
+|   |-- metadata.csv                  metapodaci svih slika
+|   `-- metadata_sample.csv           mali primer metapodataka
+|
+|-- infra/
+|   |-- docker-compose.yml            Qdrant Docker servis
+|   |-- .env.example                  primer lokalne konfiguracije
+|   `-- scripts/
+|       |-- wait_for_qdrant.py         čekanje da baza bude spremna
+|       |-- qdrant_connection.py       provera osnovne veze
+|       `-- check_qdrant_connection.py dodatna provera konekcije
+|
+|-- reports/
+|   |-- error_analysis/               HTML, CSV i JSON analiza grešaka
+|   `-- variant3_dataset_cleaning/     rezultati analize kvaliteta
+|
+|-- scripts/
+|   |-- deploy.ps1                    linearni deploy kompletnog sistema
+|   |-- prepare_dataset.py             preuzimanje i priprema STL-10
+|   |-- demo_error_analysis.ps1        terminalski demo grešaka
+|   `-- demo_variant3.ps1              terminalski demo čišćenja
+|
+|-- src/
+|   |-- 02_create_collection.py       kreiranje Qdrant kolekcije
+|   |-- 04_import_to_qdrant.py        paketni import pointova
+|   |-- 05_verify_import.py           provera uspešnog importa
+|   |-- 06_queries.py                 search, filter i CRUD komande
+|   |-- 07_error_analysis.py          weighted k-NN i analiza grešaka
+|   |-- 08_dataset_cleaning.py        slični parovi i očišćena kopija
+|   |-- 09_hnsw_benchmark.py          opciono poređenje HNSW pretrage
+|   |-- check_embeddings.py           provera embedding fajlova
+|   |-- generate_embeddings.py        generisanje CLIP vektora
+|   |-- model_utils.py                pomoćne funkcije za CLIP
+|   `-- qdrant_common.py              zajednička Qdrant podešavanja
+|
+|-- tests/
+|   |-- test_real_database.py         testovi stvarnih podataka i Qdranta
+|   |-- test_queries.py               testovi upita
+|   |-- test_error_analysis.py        testovi analize grešaka
+|   |-- test_dataset_cleaning.py      testovi analize kvaliteta
+|   `-- test_ui_server.py             testovi serverske logike
+|
+|-- ui/
+|   |-- index.html                    struktura korisničkog interfejsa
+|   |-- styles.css                    izgled aplikacije
+|   |-- app.js                        UI logika i API pozivi
+|   `-- server.py                     lokalni HTTP server i API
+|
+|-- START_UI.bat                      jednostavno kasnije pokretanje UI-ja
+|-- requirements.txt                  Python biblioteke
+`-- README.md                         dokumentacija projekta
+```
 
-- Pripremljeni podskup sadrži samo 1.000 slika iz STL-10 trening skupa.
-- CLIP se koristi bez fine-tuninga specifičnog za ovaj projekat.
-- Ponderisani k-NN je objašnjiva početna metoda, a ne protokol evaluacije treniranog klasifikatora.
-- Pragovi sličnosti i kategorije grešaka su heuristike koje zahtevaju vizuelni pregled.
-- Čišćenje kopira metapodatke i vektore; izvorni JPEG fajlovi ostaju u prvobitnom generisanom direktorijumu.
-- Lokalni UI nema autentifikaciju i namenjen je isključivo korišćenju preko loopback adrese.
-- Potpuna funkcionalnost zavisi od međusobno usklađenih lokalnih embeddinga, metapodataka, slika i sadržaja Qdrant kolekcije.
+Veliki generisani fajlovi, kao što su slike, embedding matrica, izveštaji, `.venv` i Docker podaci, ne čuvaju se u Git repozitorijumu.
 
-## Moguća unapređenja
+## Najvažnije za usmenu odbranu
 
-- evaluacija pragova na izdvojenom, ručno pregledanom skupu;
-- poseban globalni postupak za rangiranje outlier-a;
-- podrška za slanje upitne slike kroz veb interfejs;
-- reproduktivno treniranje klasifikatora i evaluacija na izdvojenom skupu;
-- zajedničko verzionisanje vektorskih kolekcija i embedding artefakata;
-- automatizovani end-to-end testovi nad privremenim Qdrant kontejnerom.
+1. **Zašto CLIP?** Pretvara sadržaj slike u vektor od 512 brojeva, pa slike mogu matematički da se porede.
+2. **Zašto Qdrant?** Namenjen je čuvanju i efikasnoj pretrazi vektora, uz payload podatke i filtere.
+3. **Kako radi pretraga?** Qdrant poredi upitni vektor sa vektorima u kolekciji koristeći Cosine metriku i vraća najbliže rezultate.
+4. **Kako radi klasifikacija?** Pet najbližih suseda glasa za klasu, a njihov similarity score predstavlja težinu glasa.
+5. **Zašto analiza koristi 1.000 slika?** To je uravnotežen i ponovljiv uzorak stvarnih podataka koji se dovoljno brzo obrađuje tokom demonstracije.
+6. **Šta su slični parovi?** Dve različite slike čiji CLIP vektori imaju score najmanje `0.94`; to je kandidat za pregled, a ne dokaz da su slike identične.
+7. **Da li se original briše?** Ne. CRUD menja samo demo pointove, a čišćenje pravi posebnu kopiju.
+8. **Da li su testovi mock?** Dugme u UI-ju testira stvarnu lokalnu Qdrant kolekciju i stvarne embedding podatke.
+9. **Da li se model trenira?** Ne. Koristi se unapred trenirani CLIP i weighted k-NN u vreme upita.
+10. **Zašto je deploy linearan?** Svaki korak zavisi od prethodnog i izvršavanje se prekida odmah ako neki korak ne uspe.
+
+## Česti problemi
+
+### `scripts\deploy.ps1` ne postoji
+
+Komanda je verovatno pokrenuta iz `src` direktorijuma. Vratiti se u koren projekta:
+
+```powershell
+cd ..
+powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
+```
+
+### Qdrant nije povezan
+
+Proveriti da li Docker Desktop radi, a zatim pokrenuti:
+
+```powershell
+docker compose -f infra\docker-compose.yml up -d
+```
+
+### Stranice analiza su prazne
+
+Izveštaji još nisu generisani. Na odgovarajućoj stranici kliknuti **Pokreni analizu** ili **Ponovi analizu**.
+
+### UI javlja da komanda traje predugo
+
+Proveriti da li Qdrant radi i da li lokalni embedding fajlovi odgovaraju kolekciji. Analize su ograničene na 1.000 slika kako bi mogle da se završe u vremenu pogodnom za demonstraciju.
+
+## Ograničenja projekta
+
+- CLIP nije dodatno treniran za STL-10.
+- Weighted k-NN je jednostavna i objašnjiva metoda, a ne posebno treniran klasifikator.
+- Pragovi za slične slike predstavljaju heuristike i zahtevaju vizuelni pregled.
+- Rezultati analiza važe za izabrani uzorak od 1.000 labeliranih slika.
+- Lokalni UI nema autentifikaciju i namenjen je samo radu na `127.0.0.1`.
+- Ispravan rad zahteva da metadata, embedding fajlovi i Qdrant kolekcija predstavljaju isti skup podataka.

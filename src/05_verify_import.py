@@ -12,8 +12,9 @@ def main():
     client = get_qdrant_client()
 
     if not client.collection_exists(COLLECTION_NAME):
-        print(f"Kolekcija '{COLLECTION_NAME}' ne postoji.")
-        return
+        raise SystemExit(f"Kolekcija '{COLLECTION_NAME}' ne postoji.")
+
+    verification_errors = []
 
     count_result = client.count(
         collection_name=COLLECTION_NAME,
@@ -42,10 +43,10 @@ def main():
     print()
 
     if exact_count != EXPECTED_POINTS:
-        print(
-            f"UPOZORENJE: Ocekivano je {EXPECTED_POINTS} pointova, "
-            f"a trenutno ih ima {exact_count}."
+        verification_errors.append(
+            f"Ocekivano je {EXPECTED_POINTS} pointova, a trenutno ih ima {exact_count}."
         )
+        print(f"GRESKA: {verification_errors[-1]}")
     else:
         print(f"OK: U kolekciji je svih {EXPECTED_POINTS} pointova.")
 
@@ -71,6 +72,7 @@ def main():
             print(f"  OK: {field_name}")
         else:
             print(f"  NEDOSTAJE: {field_name}")
+            verification_errors.append(f"Nedostaje payload indeks: {field_name}.")
 
     print()
     print("Prvih nekoliko pointova:")
@@ -86,6 +88,16 @@ def main():
         print("ID:", point.id)
         print("Payload:", point.payload)
         print("---")
+
+    if verification_errors:
+        print()
+        print("VERIFIKACIJA NIJE USPESNA:")
+        for error in verification_errors:
+            print(f"- {error}")
+        raise SystemExit(1)
+
+    print()
+    print("VERIFIKACIJA JE USPESNA.")
 
 
 if __name__ == "__main__":

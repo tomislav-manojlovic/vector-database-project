@@ -404,38 +404,3 @@ vector-database-project/
 
 Veliki generisani fajlovi, kao što su slike, embedding matrica, izveštaji, `.venv` i Docker podaci, ne čuvaju se u Git repozitorijumu.
 
-## Česti problemi
-
-### `scripts\deploy.ps1` ne postoji
-
-Komanda je verovatno pokrenuta iz `src` direktorijuma. Vratiti se u koren projekta:
-
-```powershell
-cd ..
-powershell -ExecutionPolicy Bypass -File scripts\deploy.ps1
-```
-
-### Qdrant nije povezan
-
-Proveriti da li Docker Desktop radi, a zatim pokrenuti:
-
-```powershell
-docker compose -f infra\docker-compose.yml up -d
-```
-
-### Stranice analiza su prazne
-
-Izveštaji još nisu generisani. Na odgovarajućoj stranici kliknuti **Pokreni analizu** ili **Ponovi analizu**.
-
-### UI javlja da komanda traje predugo
-
-Proveriti da li Qdrant radi i da li lokalni embedding fajlovi odgovaraju kolekciji. Analize su ograničene na 1.000 slika kako bi mogle da se završe u vremenu pogodnom za demonstraciju.
-
-## Ograničenja projekta
-
-- CLIP nije dodatno treniran za STL-10.
-- Weighted k-NN je jednostavna i objašnjiva metoda, a ne posebno treniran klasifikator.
-- Pragovi za slične slike predstavljaju heuristike i zahtevaju vizuelni pregled.
-- Rezultati analiza važe za izabrani uzorak od 1.000 labeliranih slika.
-- Lokalni UI nema autentifikaciju i namenjen je samo radu na `127.0.0.1`.
-- Ispravan rad zahteva da metadata, embedding fajlovi i Qdrant kolekcija predstavljaju isti skup podataka.

@@ -1,4 +1,4 @@
-# HNSW benchmark v2.2
+# HNSW benchmark v3.0: poređenje m i hnsw_ef parametara
 
 import argparse
 import time
@@ -9,6 +9,7 @@ import pandas as pd
 from qdrant_client.models import (
     FieldCondition,
     Filter,
+    HnswConfigDiff,
     MatchValue,
     QueryRequest,
     SearchParams,
@@ -17,13 +18,12 @@ from qdrant_client.models import (
 from qdrant_common import COLLECTION_NAME, get_qdrant_client
 
 
-VERSION = "2.2"
-HNSW_EF_VALUES = [16, 64, 128]
+VERSION = "3.0"
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 EMBEDDINGS_PATH = ROOT_DIR / "data" / "embeddings" / "embeddings.npy"
 METADATA_PATH = ROOT_DIR / "data" / "embeddings" / "embeddings_metadata.csv"
-REPORT_PATH = ROOT_DIR / "reports" / "hnsw_benchmark.csv"
+REPORT_PATH = ROOT_DIR / "reports" / "hnsw_m_benchmark.csv"
 
 
 def parse_args():
@@ -34,7 +34,74 @@ def parse_args():
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=25)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--m-values", type=int, nargs="+", default=[8, 16, 32])
+    parser.add_argument(
+        "--hnsw-ef-values",
+        type=int,
+        nargs="+",
+        default=[16, 64, 128],
+    )
+    parser.add_argument("--reindex-timeout", type=int, default=1800)
+    parser.add_argument("--poll-interval", type=int, default=5)
+    parser.add_argument(
+        "--keep-last-m",
+        action="store_true",
+        help="Ne vraćaj originalnu m vrednost nakon benchmarka.",
+    )
     return parser.parse_args()
+
+
+def collection_m(info):
+    return int(info.config.hnsw_config.m)
+
+
+def wait_for_index(client, expected_m, timeout, poll_interval):
+    """Sačekaj da nova HNSW konfiguracija bude primenjena i indeks spreman."""
+    deadline = time.monotonic() + timeout
+    ready_checks = 0
+
+    while time.monotonic() < deadline:
+        info = client.get_collection(COLLECTION_NAME)
+        status = getattr(info.status, "value", str(info.status)).lower()
+        points = int(info.points_count or 0)
+        indexed = int(info.indexed_vectors_count or 0)
+        indexed_ratio = indexed / points if points else 0.0
+
+        ready = (
+            collection_m(info) == expected_m
+            and status.endswith("green")
+            and indexed_ratio >= 0.9
+        )
+        ready_checks = ready_checks + 1 if ready else 0
+        if ready_checks >= 2:
+            print(f"HNSW indeks je spreman: m={expected_m}, indexed={indexed}/{points}")
+            return
+
+        print(
+            f"Čekam indeks: m={collection_m(info)}, status={status}, "
+            f"indexed={indexed}/{points}"
+        )
+        time.sleep(poll_interval)
+
+    raise TimeoutError(
+        f"HNSW indeks za m={expected_m} nije završen za {timeout} sekundi."
+    )
+
+
+def set_hnsw_m(client, m, timeout, poll_interval):
+    current = collection_m(client.get_collection(COLLECTION_NAME))
+    if current == m:
+        print(f"HNSW već koristi m={m}.")
+        return
+
+    print(f"Menjam HNSW m: {current} -> {m}. Qdrant ponovo gradi indeks...")
+    client.update_collection(
+        collection_name=COLLECTION_NAME,
+        hnsw_config=HnswConfigDiff(m=m),
+        timeout=timeout,
+    )
+    time.sleep(poll_interval)
+    wait_for_index(client, m, timeout, poll_interval)
 
 
 def load_data(query_count, seed):
@@ -185,10 +252,11 @@ def recall(exact_results, tested_results, queries, top_k):
     return float(np.mean(values))
 
 
-def make_row(search_type, hnsw_ef, filter_name, queries, top_k, score, times):
+def make_row(search_type, m, hnsw_ef, filter_name, queries, top_k, score, times):
     values = np.asarray(times, dtype=float)
     return {
         "search_type": search_type,
+        "m": m,
         "hnsw_ef": hnsw_ef,
         "filter": filter_name,
         "queries": len(queries),
@@ -200,7 +268,7 @@ def make_row(search_type, hnsw_ef, filter_name, queries, top_k, score, times):
     }
 
 
-def run_mode(client, embeddings, metadata, queries, args, use_filter):
+def run_mode(client, embeddings, metadata, queries, args, use_filter, m):
     filter_name = "label" if use_filter else "none"
     rows = []
 
@@ -209,7 +277,7 @@ def run_mode(client, embeddings, metadata, queries, args, use_filter):
     )
     rows.append(
         make_row(
-            "numpy_exact", "", filter_name, queries,
+            "numpy_exact", m, "", filter_name, queries,
             args.top_k, 1.0, numpy_times
         )
     )
@@ -222,17 +290,17 @@ def run_mode(client, embeddings, metadata, queries, args, use_filter):
         exact_results, qdrant_exact_results, queries, args.top_k
     )
     exact_row = make_row(
-        "qdrant_exact", "", filter_name, queries,
+        "qdrant_exact", m, "", filter_name, queries,
         args.top_k, exact_recall, qdrant_exact_times
     )
     rows.append(exact_row)
     print(
-        f"filter={filter_name}, Qdrant exact: "
+        f"m={m}, filter={filter_name}, Qdrant exact: "
         f"recall@{args.top_k}={exact_recall:.4f}, "
         f"prosecno={exact_row['mean_ms']:.2f} ms"
     )
 
-    for hnsw_ef in HNSW_EF_VALUES:
+    for hnsw_ef in args.hnsw_ef_values:
         hnsw_results, hnsw_times = qdrant_search(
             client, queries, args.top_k, args.batch_size,
             use_filter, exact=False, hnsw_ef=hnsw_ef
@@ -241,12 +309,12 @@ def run_mode(client, embeddings, metadata, queries, args, use_filter):
             exact_results, hnsw_results, queries, args.top_k
         )
         row = make_row(
-            "hnsw", hnsw_ef, filter_name, queries,
+            "hnsw", m, hnsw_ef, filter_name, queries,
             args.top_k, hnsw_recall, hnsw_times
         )
         rows.append(row)
         print(
-            f"filter={filter_name}, ef={hnsw_ef}: "
+            f"m={m}, filter={filter_name}, ef={hnsw_ef}: "
             f"recall@{args.top_k}={hnsw_recall:.4f}, "
             f"prosecno={row['mean_ms']:.2f} ms"
         )
@@ -258,12 +326,19 @@ def main():
     args = parse_args()
     if args.queries < 1 or args.top_k < 1 or args.batch_size < 1:
         raise ValueError("queries, top-k i batch-size moraju biti pozitivni.")
+    if any(value < 2 for value in args.m_values):
+        raise ValueError("Sve m vrednosti moraju biti najmanje 2.")
+    if any(value < 1 for value in args.hnsw_ef_values):
+        raise ValueError("Sve hnsw-ef vrednosti moraju biti pozitivne.")
+    if args.reindex_timeout < 1 or args.poll_interval < 1:
+        raise ValueError("Timeout i poll interval moraju biti pozitivni.")
 
     client = get_qdrant_client()
     if not client.collection_exists(COLLECTION_NAME):
         raise RuntimeError(f"Kolekcija '{COLLECTION_NAME}' ne postoji.")
 
     info = client.get_collection(COLLECTION_NAME)
+    original_m = collection_m(info)
     indexed = int(info.indexed_vectors_count or 0)
     points = int(info.points_count or 0)
     if indexed == 0:
@@ -273,13 +348,40 @@ def main():
 
     print(
         f"HNSW benchmark v{VERSION}: "
-        "NumPy exact + Qdrant exact + Qdrant HNSW"
+        f"m={args.m_values}, hnsw_ef={args.hnsw_ef_values}"
     )
 
     embeddings, metadata, queries = load_data(args.queries, args.seed)
     rows = []
-    rows.extend(run_mode(client, embeddings, metadata, queries, args, False))
-    rows.extend(run_mode(client, embeddings, metadata, queries, args, True))
+
+    try:
+        for m in args.m_values:
+            print()
+            print(f"=== BENCHMARK ZA m={m} ===")
+            set_hnsw_m(
+                client,
+                m=m,
+                timeout=args.reindex_timeout,
+                poll_interval=args.poll_interval,
+            )
+            rows.extend(
+                run_mode(client, embeddings, metadata, queries, args, False, m)
+            )
+            rows.extend(
+                run_mode(client, embeddings, metadata, queries, args, True, m)
+            )
+    finally:
+        if not args.keep_last_m:
+            current_m = collection_m(client.get_collection(COLLECTION_NAME))
+            if current_m != original_m:
+                print()
+                print(f"Vraćam originalnu vrednost m={original_m}...")
+                set_hnsw_m(
+                    client,
+                    m=original_m,
+                    timeout=args.reindex_timeout,
+                    poll_interval=args.poll_interval,
+                )
 
     results = pd.DataFrame(rows)
     required_types = {"numpy_exact", "qdrant_exact", "hnsw"}
@@ -293,6 +395,7 @@ def main():
     print(results.to_string(index=False))
     print(f"Rezultati: {REPORT_PATH}")
     print("Qdrant vremena su prosecna vremena po upitu unutar batch-a.")
+    print(f"Originalna m vrednost kolekcije: {original_m}")
 
 
 if __name__ == "__main__":

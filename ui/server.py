@@ -263,6 +263,8 @@ def similar_points(
     point_id: int,
     top_k: int,
     label: str | None = None,
+    exact: bool = False,
+    hnsw_ef: int = 64,
 ) -> list[dict[str, Any]]:
     from qdrant_client.models import FieldCondition, Filter, MatchValue, SearchParams
 
@@ -287,7 +289,10 @@ def similar_points(
         limit=top_k + 3,
         with_payload=True,
         with_vectors=False,
-        search_params=SearchParams(exact=True),
+        search_params=SearchParams(
+            exact=exact,
+            hnsw_ef=None if exact else hnsw_ef,
+        ),
     )
     output = []
     for point in result.points:
@@ -603,10 +608,20 @@ class UIHandler(BaseHTTPRequestHandler):
                 point_id = int(query.get("id", [""])[0])
                 top_k = min(max(int(query.get("top_k", ["5"])[0]), 1), 20)
                 label = query.get("label", [""])[0].strip() or None
+                exact = query.get("exact", ["false"])[0].lower() in {
+                    "1", "true", "yes"
+                }
+                hnsw_ef = int(query.get("hnsw_ef", ["64"])[0])
                 return self.send_json(
                     {
                         "query": get_point(point_id),
-                        "results": similar_points(point_id, top_k, label),
+                        "results": similar_points(
+                            point_id,
+                            top_k,
+                            label,
+                            exact=exact,
+                            hnsw_ef=hnsw_ef,
+                        ),
                     }
                 )
             if path == "/api/errors":

@@ -3,6 +3,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from qdrant_client.models import PointStruct
+from tqdm import tqdm
 
 from qdrant_common import (
     get_qdrant_client,
@@ -16,7 +17,8 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 EMBEDDINGS_PATH = ROOT_DIR / "data" / "embeddings" / "embeddings.npy"
 METADATA_PATH = ROOT_DIR / "data" / "embeddings" / "embeddings_metadata.csv"
 
-BATCH_SIZE = 100
+BATCH_SIZE = 1000
+PARALLEL_WORKERS = 4
 
 
 def validate_inputs(embeddings, metadata):
@@ -34,8 +36,8 @@ def validate_inputs(embeddings, metadata):
         "image_path",
         "label",
         "label_id",
-        "split",
         "is_labeled",
+        "split",
         "embedding_index",
         "status",
     }
@@ -53,18 +55,18 @@ def validate_inputs(embeddings, metadata):
 
 
 def build_point(row, embeddings):
-    embedding_index = int(row["embedding_index"])
-    image_id = int(row["id"])
+    embedding_index = int(row.embedding_index)
+    image_id = int(row.id)
 
     vector = embeddings[embedding_index].astype(float).tolist()
 
     payload = {
         "id": image_id,
-        "image_path": str(row["image_path"]),
-        "label": str(row["label"]),
-        "label_id": int(row["label_id"]),
-        "split": str(row["split"]),
-        "is_labeled": bool(row["is_labeled"]),
+        "image_path": str(row.image_path),
+        "label": str(row.label),
+        "label_id": int(row.label_id),
+        "is_labeled": bool(row.is_labeled),
+        "split": str(row.split),
     }
 
     return PointStruct(
@@ -97,32 +99,27 @@ def main():
             "Prvo pokreni src/02_create_collection.py."
         )
 
-    points_batch = []
-    total_imported = 0
+    points = (
+        build_point(row, embeddings)
+        for row in metadata.itertuples(index=False)
+    )
+    points = tqdm(points, total=len(metadata), desc="Import u Qdrant", unit="point")
 
-    print("Krecem import u Qdrant...")
+    print(
+        f"Krecem import: batch_size={BATCH_SIZE}, "
+        f"parallel={PARALLEL_WORKERS}"
+    )
 
-    for _, row in metadata.iterrows():
-        point = build_point(row, embeddings)
-        points_batch.append(point)
+    client.upload_points(
+        collection_name=COLLECTION_NAME,
+        points=points,
+        batch_size=BATCH_SIZE,
+        parallel=PARALLEL_WORKERS,
+        max_retries=3,
+        wait=True,
+    )
 
-        if len(points_batch) >= BATCH_SIZE:
-            client.upsert(
-                collection_name=COLLECTION_NAME,
-                points=points_batch,
-            )
-            total_imported += len(points_batch)
-            print(f"Importovano: {total_imported}")
-            points_batch = []
-
-    if points_batch:
-        client.upsert(
-            collection_name=COLLECTION_NAME,
-            points=points_batch,
-        )
-        total_imported += len(points_batch)
-
-    print(f"Gotovo. Ukupno importovano pointova: {total_imported}")
+    print(f"Gotovo. Ukupno importovano pointova: {len(metadata)}")
 
 
 if __name__ == "__main__":

@@ -125,6 +125,54 @@ def load_inputs(
     return selected_embeddings, metadata
 
 
+def select_labeled_inputs(
+    embeddings: np.ndarray,
+    metadata: pd.DataFrame,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Izdvoji slike koje imaju stvarnu STL-10 labelu."""
+    if "is_labeled" in metadata.columns:
+        labeled_mask = (
+            metadata["is_labeled"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin(["true", "1", "yes"])
+        )
+    else:
+        labeled_mask = metadata["label"].str.lower() != "unlabeled"
+
+    positions = np.flatnonzero(labeled_mask.to_numpy())
+    if len(positions) == 0:
+        raise ValueError("Nema označenih slika za analizu grešaka.")
+
+    return (
+        embeddings[positions],
+        metadata.iloc[positions].reset_index(drop=True),
+    )
+
+
+def select_query_sample(
+    embeddings: np.ndarray,
+    metadata: pd.DataFrame,
+    max_images: int,
+    seed: int,
+) -> tuple[np.ndarray, pd.DataFrame]:
+    """Izaberi reproducibilan uzorak upita; nula znači sve slike."""
+    if max_images < 0:
+        raise ValueError("--max-images ne može biti negativan.")
+    if max_images == 0 or max_images >= len(metadata):
+        return embeddings, metadata
+
+    rng = np.random.default_rng(seed)
+    positions = np.sort(
+        rng.choice(len(metadata), size=max_images, replace=False)
+    )
+    return (
+        embeddings[positions],
+        metadata.iloc[positions].reset_index(drop=True),
+    )
+
+
 class LocalNeighborBackend:
     """Tačna cosine pretraga u NumPy-ju, korisna za offline proveru."""
 
@@ -133,7 +181,6 @@ class LocalNeighborBackend:
     def __init__(self, embeddings: np.ndarray, metadata: pd.DataFrame):
         self.embeddings = embeddings
         self.metadata = metadata.reset_index(drop=True)
-        self.similarities = embeddings @ embeddings.T
         self.id_to_index = {
             int(point_id): index for index, point_id in enumerate(self.metadata["id"])
         }
@@ -147,11 +194,16 @@ class LocalNeighborBackend:
     def search(self, query_id: int, query_vector: np.ndarray, limit: int) -> list[Neighbor]:
         if query_id not in self.id_to_index:
             raise KeyError(f"ID={query_id} ne postoji u lokalnim metapodacima.")
+        if limit >= len(self.metadata):
+            raise ValueError("Broj suseda mora biti manji od broja označenih slika.")
 
         query_index = self.id_to_index[query_id]
-        scores = self.similarities[query_index].copy()
+        scores = self.embeddings @ query_vector
         scores[query_index] = -np.inf
-        ordered_indices = np.argsort(-scores, kind="stable")[:limit]
+        candidates = np.argpartition(scores, -limit)[-limit:]
+        ordered_indices = candidates[
+            np.argsort(-scores[candidates], kind="stable")
+        ]
 
         neighbors: list[Neighbor] = []
         for index in ordered_indices:
@@ -179,9 +231,16 @@ class QdrantNeighborBackend:
         batch_size: int = 100,
         exact: bool = False,
         hnsw_ef: int = 64,
+        labeled_only: bool = False,
     ):
         try:
-            from qdrant_client.models import QueryRequest, SearchParams
+            from qdrant_client.models import (
+                FieldCondition,
+                Filter,
+                MatchValue,
+                QueryRequest,
+                SearchParams,
+            )
         except ImportError as exc:
             raise ImportError(
                 "Qdrant backend zahteva qdrant-client. Pokreni: "
@@ -203,6 +262,18 @@ class QdrantNeighborBackend:
         self.query_request_class = QueryRequest
         self.batch_size = batch_size
         self._neighbor_cache: dict[int, list[Neighbor]] = {}
+        self.query_filter = (
+            Filter(
+                must=[
+                    FieldCondition(
+                        key="is_labeled",
+                        match=MatchValue(value=True),
+                    )
+                ]
+            )
+            if labeled_only
+            else None
+        )
 
         if self.batch_size < 1:
             raise ValueError("Qdrant batch size mora biti najmanje 1.")
@@ -268,7 +339,8 @@ class QdrantNeighborBackend:
             requests = [
                 self.query_request_class(
                     query=vector.astype(float).tolist(),
-                    limit=limit + 3,
+                    filter=self.query_filter,
+                    limit=limit + 1,
                     with_payload=["label", "image_path"],
                     with_vector=False,
                     params=self.search_params,
@@ -306,7 +378,8 @@ class QdrantNeighborBackend:
         result = self.client.query_points(
             collection_name=self.collection_name,
             query=query_vector.astype(float).tolist(),
-            limit=limit + 3,
+            query_filter=self.query_filter,
+            limit=limit + 1,
             with_payload=["label", "image_path"],
             with_vectors=False,
             search_params=self.search_params,
@@ -321,6 +394,7 @@ def build_backend(
     qdrant_batch_size: int = 100,
     exact: bool = False,
     hnsw_ef: int = 64,
+    labeled_only: bool = False,
 ) -> NeighborBackend:
     if backend_name == "local":
         return LocalNeighborBackend(embeddings, metadata)
@@ -329,6 +403,7 @@ def build_backend(
             batch_size=qdrant_batch_size,
             exact=exact,
             hnsw_ef=hnsw_ef,
+            labeled_only=labeled_only,
         )
     raise ValueError(f"Nepoznat backend: {backend_name}")
 
@@ -453,8 +528,6 @@ def analyze_dataset(
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[int, list[Neighbor]]]:
     if k < 1:
         raise ValueError("k mora biti najmanje 1.")
-    if k >= len(metadata):
-        raise ValueError("k mora biti manji od broja slika.")
 
     prediction_rows: list[dict[str, Any]] = []
     error_rows: list[dict[str, Any]] = []
@@ -886,35 +959,60 @@ def find_demo_error(
 
 
 def command_validate(args: argparse.Namespace) -> None:
-    embeddings, metadata = load_inputs()
-    backend = build_backend(args.backend, embeddings, metadata)
-    backend.validate(len(metadata))
+    all_embeddings, all_metadata = load_inputs()
+    embeddings, metadata = select_labeled_inputs(all_embeddings, all_metadata)
+    backend = build_backend(
+        args.backend,
+        embeddings,
+        metadata,
+        labeled_only=True,
+    )
+    expected_count = len(all_metadata) if args.backend == "qdrant" else len(metadata)
+    backend.validate(expected_count)
 
     labels = class_order(metadata)
     print("VALIDACIJA USPEŠNA")
     print(f"Backend: {backend.name}")
-    print(f"Broj validnih slika: {len(metadata)}")
+    print(f"Ukupno validnih slika: {len(all_metadata)}")
+    print(f"Označenih slika za analizu: {len(metadata)}")
     print(f"Dimenzija embeddinga: {embeddings.shape[1]}")
     print(f"Broj klasa: {len(labels)}")
     print(f"Klase: {', '.join(labels)}")
 
 
 def command_analyze(args: argparse.Namespace) -> None:
-    embeddings, metadata = load_inputs()
+    all_embeddings, all_metadata = load_inputs()
+    labeled_embeddings, labeled_metadata = select_labeled_inputs(
+        all_embeddings,
+        all_metadata,
+    )
+    query_embeddings, query_metadata = select_query_sample(
+        labeled_embeddings,
+        labeled_metadata,
+        max_images=args.max_images,
+        seed=args.seed,
+    )
     backend = build_backend(
         args.backend,
-        embeddings,
-        metadata,
+        labeled_embeddings,
+        labeled_metadata,
         qdrant_batch_size=args.qdrant_batch_size,
         exact=args.exact,
         hnsw_ef=args.hnsw_ef,
+        labeled_only=True,
     )
-    backend.validate(len(metadata))
+    expected_count = (
+        len(all_metadata) if args.backend == "qdrant" else len(labeled_metadata)
+    )
+    backend.validate(expected_count)
 
-    print(f"Pokrećem analizu: backend={backend.name}, k={args.k}")
+    print(
+        f"Pokrećem analizu: backend={backend.name}, k={args.k}, "
+        f"upiti={len(query_metadata)}, označeni susedi={len(labeled_metadata)}"
+    )
     predictions, errors, error_neighbors = analyze_dataset(
-        embeddings=embeddings,
-        metadata=metadata,
+        embeddings=query_embeddings,
+        metadata=query_metadata,
         backend=backend,
         k=args.k,
         annotation_similarity=args.annotation_similarity,
@@ -941,15 +1039,18 @@ def command_analyze(args: argparse.Namespace) -> None:
 
 
 def command_inspect(args: argparse.Namespace) -> None:
-    embeddings, metadata = load_inputs()
+    all_embeddings, all_metadata = load_inputs()
+    embeddings, metadata = select_labeled_inputs(all_embeddings, all_metadata)
     backend = build_backend(
         args.backend,
         embeddings,
         metadata,
         exact=args.exact,
         hnsw_ef=args.hnsw_ef,
+        labeled_only=True,
     )
-    backend.validate(len(metadata))
+    expected_count = len(all_metadata) if args.backend == "qdrant" else len(metadata)
+    backend.validate(expected_count)
 
     matches = metadata.index[metadata["id"] == args.id].tolist()
     if not matches:
@@ -965,15 +1066,18 @@ def command_inspect(args: argparse.Namespace) -> None:
 
 
 def command_demo(args: argparse.Namespace) -> None:
-    embeddings, metadata = load_inputs()
+    all_embeddings, all_metadata = load_inputs()
+    embeddings, metadata = select_labeled_inputs(all_embeddings, all_metadata)
     backend = build_backend(
         args.backend,
         embeddings,
         metadata,
         exact=args.exact,
         hnsw_ef=args.hnsw_ef,
+        labeled_only=True,
     )
-    backend.validate(len(metadata))
+    expected_count = len(all_metadata) if args.backend == "qdrant" else len(metadata)
+    backend.validate(expected_count)
 
     if args.id is None:
         index, neighbors = find_demo_error(embeddings, metadata, backend, args.k)
@@ -994,10 +1098,11 @@ def command_demo(args: argparse.Namespace) -> None:
 
 
 def command_compare(args: argparse.Namespace) -> None:
-    embeddings, metadata = load_inputs()
+    all_embeddings, all_metadata = load_inputs()
+    embeddings, metadata = select_labeled_inputs(all_embeddings, all_metadata)
     local_backend = LocalNeighborBackend(embeddings, metadata)
-    qdrant_backend = QdrantNeighborBackend(exact=True)
-    qdrant_backend.validate(len(metadata))
+    qdrant_backend = QdrantNeighborBackend(exact=True, labeled_only=True)
+    qdrant_backend.validate(len(all_metadata))
 
     sample_size = min(args.sample_size, len(metadata))
     rng = np.random.default_rng(args.seed)
@@ -1063,14 +1168,29 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser = subparsers.add_parser("validate", help="Proveri ulazne fajlove i backend.")
     validate_parser.add_argument("--backend", choices=["qdrant", "local"], default="qdrant")
 
-    analyze_parser = subparsers.add_parser("analyze", help="Analiziraj svih 1000 slika.")
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Analiziraj uzorak označenih slika.",
+    )
     add_shared_analysis_arguments(analyze_parser)
     analyze_parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     analyze_parser.add_argument(
         "--qdrant-batch-size",
         type=int,
-        default=100,
-        help="Broj Qdrant upita u jednom HTTP zahtevu (podrazumevano 100).",
+        default=256,
+        help="Broj Qdrant upita u jednom HTTP zahtevu (podrazumevano 256).",
+    )
+    analyze_parser.add_argument(
+        "--max-images",
+        type=int,
+        default=1000,
+        help="Broj označenih slika za analizu; 0 znači sve (podrazumevano 1000).",
+    )
+    analyze_parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Seed za reproducibilan izbor uzorka.",
     )
     analyze_parser.add_argument(
         "--html-error-limit",

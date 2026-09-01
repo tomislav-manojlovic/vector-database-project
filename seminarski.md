@@ -4,6 +4,7 @@
 **Projekat:** Qdrant Image Lab  
 **Sistem:** Qdrant  
 **Autori:** Andrija Milovanović, Petar Nešić, Tomislav Manojlović, Mihailo Golubović, Igor Perović, Mihailo Mitrović
+
 **Akademska godina:** 2025/2026.
 
 ---

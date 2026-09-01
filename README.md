@@ -1,6 +1,6 @@
 # Qdrant Image Lab
 
-Studentski projekat iz baza podataka i računarskog vida koji prikazuje kako se slike mogu predstaviti vektorima, sačuvati u vektorskoj bazi i pretraživati prema vizuelnoj sličnosti.
+Projekat iz baza podataka i računarskog vida koji prikazuje kako se slike mogu predstaviti vektorima, sačuvati u vektorskoj bazi i pretraživati prema vizuelnoj sličnosti.
 
 Projekat koristi:
 
@@ -66,16 +66,14 @@ Kompletna Qdrant kolekcija sadrži **113.000 stvarnih STL-10 slika**:
 
 Deset labeliranih klasa su: `airplane`, `bird`, `car`, `cat`, `deer`, `dog`, `horse`, `monkey`, `ship` i `truck`.
 
-Interaktivna analiza grešaka i analiza kvaliteta koriste uravnotežen uzorak od **1.000 stvarnih slika**, odnosno po 100 labeliranih slika iz svake klase. Uzorak nije mock i čita se iz istih metapodataka, embeddinga i Qdrant kolekcije kao ostatak aplikacije.
+Interaktivna analiza grešaka i analiza kvaliteta koriste uravnotežen uzorak od **1.000 stvarnih slika**, odnosno po 100 označenih slika iz svake klase.
 
 Uzorak od 1.000 slika je izabran zato što:
 
 - svaka klasa ima isti broj primera;
 - analiza se dovoljno brzo izvršava tokom demonstracije;
 - rezultat je ponovljiv i lak za objašnjavanje;
-- poređenje svih mogućih parova nad 113.000 slika bilo bi nepotrebno sporo za studentsku demonstraciju.
-
-Rezultati u UI-ju nisu ručno upisani. Broj grešaka, tačnost, broj sličnih parova, grupa i kandidata čitaju se iz poslednje pokrenute analize.
+- poređenje svih mogućih parova nad 113.000 slika bilo bi nepotrebno sporo za demonstraciju.
 
 ## Preduslovi
 
@@ -88,16 +86,6 @@ Pre prvog pokretanja potrebno je imati:
 - dovoljno slobodnog prostora za 113.000 slika i njihove embeddinge.
 
 Sve naredne komande pokreću se iz **korena projekta**:
-
-```text
-D:\BazeVidProj\vector-database-project
-```
-
-Ako je terminal trenutno u `src` direktorijumu, prvo se treba vratiti jedan nivo:
-
-```powershell
-cd ..
-```
 
 ## Prvo pokretanje projekta
 
@@ -250,7 +238,7 @@ Create, Read, Update i Delete izvršavaju se samo nad privremenim pointovima či
 
 ### Evaluacija modela
 
-Weighted k-NN za svaku od 1.000 analiziranih slika pronalazi pet najbližih drugih labeliranih slika. Kosinusni score suseda koristi se kao težina glasa klase.
+Weighted k-NN za svaku od 1.000 analiziranih slika pronalazi pet najbližih drugih označenih slika. Kosinusni score suseda koristi se kao težina glasa klase.
 
 Stranica prikazuje:
 
